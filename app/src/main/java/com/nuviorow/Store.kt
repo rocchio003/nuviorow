@@ -32,6 +32,11 @@ class Store(context: Context) {
         get() = sp.getString("deepLink", "") ?: ""
         set(v) = sp.edit().putString("deepLink", v.trim()).apply()
 
+    // "landscape" = immagini orizzontali 16:9 (se disponibili), "poster" = locandine verticali 2:3
+    var cardStyle: String
+        get() = sp.getString("cardStyle", "landscape") ?: "landscape"
+        set(v) = sp.edit().putString("cardStyle", v).apply()
+
     var maxItems: Int
         get() = sp.getInt("maxItems", 20)
         set(v) = sp.edit().putInt("maxItems", v).apply()
