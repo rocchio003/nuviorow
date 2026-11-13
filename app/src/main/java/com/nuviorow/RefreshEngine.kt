@@ -171,19 +171,16 @@ object RefreshEngine {
         return Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
+    // La card apre il trampolino LaunchActivity, che legge le impostazioni al momento del tocco.
     private fun programIntent(ctx: Context, store: Store, m: Meta): Intent {
-        val template = store.deepLink
-        if (template.isNotEmpty()) {
-            val uriStr = template
-                .replace("{type}", Uri.encode(m.type))
-                .replace("{id}", Uri.encode(m.id, ":"))
-                .replace("{name}", Uri.encode(m.name))
-            val i = Intent(Intent.ACTION_VIEW, Uri.parse(uriStr))
-            if (store.appPackage.isNotEmpty()) i.setPackage(store.appPackage)
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            return i
-        }
-        return launchIntent(ctx, store)
+        val i = Intent(ctx, LaunchActivity::class.java)
+        i.action = "com.nuviorows.OPEN"
+        i.data = Uri.parse("nuviorows://open/" + Uri.encode(m.type) + "/" + Uri.encode(m.id, ":"))
+        i.putExtra("type", m.type)
+        i.putExtra("id", m.id)
+        i.putExtra("name", m.name)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return i
     }
 
     private fun logoBitmap(): Bitmap {
