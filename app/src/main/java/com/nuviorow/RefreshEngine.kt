@@ -123,22 +123,30 @@ object RefreshEngine {
     private fun replacePrograms(ctx: Context, store: Store, channelId: Long, metas: List<Meta>) {
         val resolver = ctx.contentResolver
         resolver.delete(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), null, null)
+        val landscape = store.cardStyle == "landscape"
         for (m in metas) {
             val type = when (m.type) {
                 "movie" -> TvContractCompat.PreviewPrograms.TYPE_MOVIE
                 "series" -> TvContractCompat.PreviewPrograms.TYPE_TV_SERIES
                 else -> TvContractCompat.PreviewPrograms.TYPE_CLIP
             }
-            val ratio = when (m.posterShape) {
-                "landscape" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
-                "square" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_1_1
-                else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
+            // Stile orizzontale: uso l'immagine "background" dell'addon; se manca, ripiego sulla locandina.
+            val useBackground = landscape && m.background.startsWith("http")
+            val image = if (useBackground) m.background else m.poster
+            val ratio = if (useBackground) {
+                TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
+            } else {
+                when (m.posterShape) {
+                    "landscape" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
+                    "square" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_1_1
+                    else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
+                }
             }
             val builder = PreviewProgram.Builder()
                 .setChannelId(channelId)
                 .setType(type)
                 .setTitle(m.name)
-                .setPosterArtUri(Uri.parse(m.poster))
+                .setPosterArtUri(Uri.parse(image))
                 .setPosterArtAspectRatio(ratio)
                 .setIntent(programIntent(ctx, store, m))
                 .setInternalProviderId(m.id)
