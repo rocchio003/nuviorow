@@ -1,34 +1,39 @@
 package com.nuviorows
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.tvprovider.media.tv.TvContractCompat
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
     private lateinit var store: Store
+    private lateinit var web: WebConfig
     private val io = Executors.newSingleThreadExecutor()
     private var addons: MutableList<AddonCfg> = mutableListOf()
 
-    private lateinit var etPackage: EditText
-    private lateinit var etDeepLink: EditText
-    private lateinit var etMax: EditText
-    private lateinit var etManifest: EditText
-    private lateinit var etImport: EditText
     private lateinit var listBox: LinearLayout
     private lateinit var status: TextView
+    private lateinit var webInfo: TextView
+    private val fieldRefreshers = mutableListOf<() -> Unit>()
 
     private val gray = 0xFFAAAAAA.toInt()
 
@@ -36,6 +41,18 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         store = Store(this)
         addons = store.loadAddons()
+
+        web = WebConfig(
+            store,
+            onAddAddon = { url -> doAdd(url) },
+            onImportList = { url -> doImport(url) },
+            onSettingsSaved = {
+                runOnUiThread {
+                    for (r in fieldRefreshers) r()
+                    Scheduler.schedule(this@MainActivity)
+                }
+            }
+        )
 
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
@@ -54,37 +71,37 @@ class MainActivity : Activity() {
                 14f, gray, false
             )
         )
+        webInfo = tv("", 14f, 0xFFFFD54F.toInt(), false)
+        root.addView(webInfo)
 
         // ---- Impostazioni ----
         root.addView(tv("1. Impostazioni apertura card", 20f, Color.WHITE, true))
-        etPackage = edit("Pacchetto app Nuvio (es. com.esempio.nuvio)", store.appPackage, false)
-        etDeepLink = edit("Deep link (opzionale), es. nuvio://{type}/{id}", store.deepLink, false)
-        etMax = edit("Titoli per riga (5-50)", store.maxItems.toString(), true)
-        root.addView(etPackage)
-        root.addView(etDeepLink)
-        root.addView(etMax)
+        root.addView(fieldBtn("Pacchetto app Nuvio", { store.appPackage }, { store.appPackage = it }))
+        root.addView(fieldBtn("Deep link", { store.deepLink }, { store.deepLink = it }))
+        root.addView(
+            fieldBtn(
+                "Titoli per riga",
+                { store.maxItems.toString() },
+                { store.maxItems = (it.toIntOrNull() ?: 20).coerceIn(5, 50) },
+                true
+            )
+        )
         root.addView(
             tv(
-                "Segnaposto deep link: {type} = movie/series, {id} = id del titolo, {name} = nome. " +
-                    "Se lo lasci vuoto, la card apre l'app indicata sopra.",
+                "Deep link consigliato: stremio:///detail/{type}/{id}  ({type} = movie/series, {id} = id del titolo). " +
+                    "Il pacchetto può restare vuoto. Premi un campo per modificarlo.",
                 12f, gray, false
             )
         )
-        root.addView(btn("Salva impostazioni") {
-            saveSettings()
-            Scheduler.schedule(this@MainActivity)
-            setStatus("Impostazioni salvate.")
-        })
 
         // ---- Aggiunta addon ----
         root.addView(tv("2. Aggiungi addon", 20f, Color.WHITE, true))
-        etManifest = edit("URL manifest dell'addon (https://.../manifest.json)", "", false)
-        root.addView(etManifest)
-        root.addView(btn("Aggiungi addon") { onAddAddon() })
-
-        etImport = edit("URL di una lista (un manifest per riga, es. Gist raw)", "", false)
-        root.addView(etImport)
-        root.addView(btn("Importa lista di addon") { onImportList() })
+        root.addView(btn("Aggiungi addon (incolla URL manifest)") {
+            askText("URL manifest dell'addon", "", false) { url -> runBg { doAdd(url) } }
+        })
+        root.addView(btn("Importa lista di addon da URL") {
+            askText("URL della lista (un manifest per riga)", "", false) { url -> runBg { doImport(url) } }
+        })
 
         // ---- Cataloghi ----
         root.addView(tv("3. Scegli i cataloghi da mostrare", 20f, Color.WHITE, true))
@@ -110,69 +127,78 @@ class MainActivity : Activity() {
         Scheduler.schedule(this)
     }
 
-    // ---------- azioni ----------
-
-    private fun onAddAddon() {
-        val url = etManifest.text.toString().trim()
-        if (url.isEmpty()) {
-            setStatus("Incolla prima l'URL del manifest.")
-            return
-        }
-        setStatus("Carico il manifest...")
-        io.execute {
-            try {
-                val a = Stremio.loadAddon(url)
-                runOnUiThread {
-                    mergeAddon(a)
-                    store.saveAddons(addons)
-                    renderAddons()
-                    etManifest.setText("")
-                    setStatus(
-                        "Aggiunto: ${a.name} (${a.catalogs.size} cataloghi utilizzabili). " +
-                            "Spunta quelli che vuoi in home."
-                    )
-                }
-            } catch (e: Exception) {
-                runOnUiThread { setStatus("Errore: ${e.message}") }
-            }
+    override fun onResume() {
+        super.onResume()
+        web.start()
+        val ips = localIps()
+        webInfo.text = if (ips.isEmpty()) {
+            "Rete non trovata: collega la TV al Wi-Fi per usare l'inserimento dal telefono."
+        } else {
+            "Per incollare gli URL dal telefono (stessa Wi-Fi) apri nel browser: " +
+                ips.joinToString("  oppure  ") { "http://$it:${WebConfig.PORT}" }
         }
     }
 
-    private fun onImportList() {
-        val url = etImport.text.toString().trim()
-        if (url.isEmpty()) {
-            setStatus("Incolla prima l'URL della lista.")
-            return
-        }
-        setStatus("Scarico la lista...")
-        io.execute {
-            try {
-                val lines = Net.get(url).lines()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() && !it.startsWith("#") }
-                val loaded = mutableListOf<AddonCfg>()
-                var failed = 0
-                for (l in lines) {
-                    try {
-                        loaded.add(Stremio.loadAddon(l))
-                    } catch (e: Exception) {
-                        failed++
-                    }
-                }
-                runOnUiThread {
-                    for (a in loaded) mergeAddon(a)
-                    store.saveAddons(addons)
-                    renderAddons()
-                    setStatus("Importati ${loaded.size} addon" + if (failed > 0) ", $failed non raggiungibili." else ".")
-                }
-            } catch (e: Exception) {
-                runOnUiThread { setStatus("Errore: ${e.message}") }
+    override fun onPause() {
+        super.onPause()
+        web.stop()
+    }
+
+    // ---------- azioni ----------
+
+    // Da chiamare su un thread in background (rete). Aggiorna la UI e restituisce il messaggio.
+    private fun doAdd(url: String): String {
+        val u = url.trim()
+        if (u.isEmpty()) return "Incolla prima l'URL del manifest."
+        return try {
+            val a = Stremio.loadAddon(u)
+            runOnUiThread {
+                mergeAddon(a)
+                store.saveAddons(addons)
+                renderAddons()
             }
+            "Aggiunto: ${a.name} (${a.catalogs.size} cataloghi utilizzabili). Spunta quelli che vuoi in home, sulla TV."
+        } catch (e: Exception) {
+            "Errore: ${e.message}"
+        }
+    }
+
+    private fun doImport(url: String): String {
+        val u = url.trim()
+        if (u.isEmpty()) return "Incolla prima l'URL della lista."
+        return try {
+            val lines = Net.get(u).lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+            val loaded = mutableListOf<AddonCfg>()
+            var failed = 0
+            for (l in lines) {
+                try {
+                    loaded.add(Stremio.loadAddon(l))
+                } catch (e: Exception) {
+                    failed++
+                }
+            }
+            runOnUiThread {
+                for (a in loaded) mergeAddon(a)
+                store.saveAddons(addons)
+                renderAddons()
+            }
+            "Importati ${loaded.size} addon" + if (failed > 0) ", $failed non raggiungibili." else "."
+        } catch (e: Exception) {
+            "Errore: ${e.message}"
+        }
+    }
+
+    private fun runBg(work: () -> String) {
+        setStatus("Attendi...")
+        io.execute {
+            val msg = work()
+            runOnUiThread { setStatus(msg) }
         }
     }
 
     private fun onRefresh() {
-        saveSettings()
         Scheduler.schedule(this)
         setStatus("Aggiorno le righe...")
         io.execute {
@@ -201,12 +227,6 @@ class MainActivity : Activity() {
         } else {
             addons.add(new)
         }
-    }
-
-    private fun saveSettings() {
-        store.appPackage = etPackage.text.toString()
-        store.deepLink = etDeepLink.text.toString()
-        store.maxItems = (etMax.text.toString().toIntOrNull() ?: 20).coerceIn(5, 50)
     }
 
     // ---------- UI ----------
@@ -245,6 +265,7 @@ class MainActivity : Activity() {
 
     private fun setStatus(msg: String) {
         status.text = msg
+        if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
 
     private fun typeLabel(type: String): String = when (type) {
@@ -265,27 +286,88 @@ class MainActivity : Activity() {
         return v
     }
 
-    private fun edit(hintText: String, value: String, numeric: Boolean): EditText {
-        val e = EditText(this)
-        e.hint = hintText
-        e.setText(value)
-        e.setTextColor(Color.WHITE)
-        e.setHintTextColor(0xFF777777.toInt())
-        e.textSize = 15f
-        e.inputType = if (numeric) {
-            InputType.TYPE_CLASS_NUMBER
-        } else {
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        }
-        return e
-    }
-
     private fun btn(label: String, onClick: () -> Unit): Button {
         val b = Button(this)
         b.text = label
         b.isAllCaps = false
         b.setOnClickListener { onClick() }
         return b
+    }
+
+    // Bottone che mostra "Titolo: valore"; premendolo si apre una finestra per modificarlo.
+    private fun fieldBtn(
+        title: String,
+        get: () -> String,
+        set: (String) -> Unit,
+        numeric: Boolean = false
+    ): Button {
+        val b = Button(this)
+        b.isAllCaps = false
+        val refresh: () -> Unit = {
+            b.text = title + ": " + get().ifEmpty { "(vuoto)" }
+        }
+        refresh()
+        fieldRefreshers.add(refresh)
+        b.setOnClickListener {
+            askText(title, get(), numeric) { v ->
+                set(v)
+                refresh()
+                Scheduler.schedule(this@MainActivity)
+            }
+        }
+        return b
+    }
+
+    // Finestra di inserimento testo: tastiera della TV oppure pulsante "Incolla" dagli appunti.
+    private fun askText(title: String, current: String, numeric: Boolean, onOk: (String) -> Unit) {
+        val input = EditText(this)
+        input.setSingleLine(true)
+        input.inputType = if (numeric) {
+            InputType.TYPE_CLASS_NUMBER
+        } else {
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        input.setText(current)
+        input.setSelection(input.text.length)
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(input)
+            .setPositiveButton("OK") { _, _ -> onOk(input.text.toString().trim()) }
+            .setNeutralButton("Incolla", null)
+            .setNegativeButton("Annulla", null)
+            .create()
+        dlg.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dlg.show()
+        dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = cm.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val t = clip.getItemAt(0).coerceToText(this@MainActivity).toString().trim()
+                input.setText(t)
+                input.setSelection(input.text.length)
+            } else {
+                Toast.makeText(this@MainActivity, "Appunti vuoti", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun localIps(): List<String> {
+        val out = mutableListOf<String>()
+        try {
+            val ifaces = NetworkInterface.getNetworkInterfaces() ?: return out
+            for (ni in ifaces) {
+                if (!ni.isUp || ni.isLoopback) continue
+                for (addr in ni.inetAddresses) {
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        addr.hostAddress?.let { out.add(it) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // ignora
+        }
+        return out
     }
 
     private fun requestTvPermissions() {
