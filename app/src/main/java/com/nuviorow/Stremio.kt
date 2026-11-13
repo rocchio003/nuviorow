@@ -1,0 +1,115 @@
+package com.nuviorows
+
+import android.net.Uri
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+
+object Net {
+    fun get(urlStr: String, maxRedirects: Int = 5): String {
+        var current = urlStr
+        for (i in 0..maxRedirects) {
+            val conn = URL(current).openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = false
+            conn.connectTimeout = 15000
+            conn.readTimeout = 25000
+            conn.setRequestProperty("User-Agent", "NuvioRows/1.0")
+            conn.setRequestProperty("Accept", "application/json,text/plain,*/*")
+            try {
+                val code = conn.responseCode
+                if (code in 300..399) {
+                    val loc = conn.getHeaderField("Location")
+                        ?: throw IOException("Redirect senza Location")
+                    current = URL(URL(current), loc).toString()
+                    continue
+                }
+                if (code !in 200..299) throw IOException("HTTP $code")
+                return conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw IOException("Troppi redirect")
+    }
+}
+
+data class Meta(
+    val id: String,
+    val type: String,
+    val name: String,
+    val poster: String,
+    val posterShape: String,
+    val description: String
+)
+
+object Stremio {
+
+    fun normalizeBase(input: String): String {
+        var u = input.trim()
+        if (u.startsWith("stremio://", ignoreCase = true)) {
+            u = "https://" + u.substring("stremio://".length)
+        }
+        if (u.endsWith("/manifest.json", ignoreCase = true)) {
+            u = u.substring(0, u.length - "/manifest.json".length)
+        }
+        return u.trimEnd('/')
+    }
+
+    fun loadAddon(input: String): AddonCfg {
+        val base = normalizeBase(input)
+        val json = JSONObject(Net.get("$base/manifest.json"))
+        val name = json.optString("name", base).ifEmpty { base }
+        val cats = mutableListOf<CatalogCfg>()
+        val arr = json.optJSONArray("catalogs") ?: JSONArray()
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i) ?: continue
+            val type = c.optString("type")
+            val id = c.optString("id")
+            if (type.isEmpty() || id.isEmpty()) continue
+            if (requiresExtra(c)) continue
+            cats.add(CatalogCfg(type, id, c.optString("name", id).ifEmpty { id }, false))
+        }
+        return AddonCfg(base, name, cats)
+    }
+
+    // I cataloghi che richiedono un parametro obbligatorio (es. solo ricerca) non si possono mostrare come riga.
+    private fun requiresExtra(c: JSONObject): Boolean {
+        val extra = c.optJSONArray("extra")
+        if (extra != null) {
+            for (i in 0 until extra.length()) {
+                if (extra.optJSONObject(i)?.optBoolean("isRequired", false) == true) return true
+            }
+        }
+        val req = c.optJSONArray("extraRequired")
+        if (req != null && req.length() > 0) return true
+        return false
+    }
+
+    fun fetchCatalog(base: String, type: String, id: String, limit: Int): List<Meta> {
+        val url = "$base/catalog/${Uri.encode(type)}/${Uri.encode(id)}.json"
+        val json = JSONObject(Net.get(url))
+        val metas = json.optJSONArray("metas") ?: return emptyList()
+        val out = mutableListOf<Meta>()
+        for (i in 0 until metas.length()) {
+            if (out.size >= limit) break
+            val m = metas.optJSONObject(i) ?: continue
+            val poster = m.optString("poster")
+            val mid = m.optString("id")
+            val name = m.optString("name")
+            if (poster.isEmpty() || mid.isEmpty() || name.isEmpty()) continue
+            out.add(
+                Meta(
+                    id = mid,
+                    type = m.optString("type", type).ifEmpty { type },
+                    name = name,
+                    poster = poster,
+                    posterShape = m.optString("posterShape", "poster"),
+                    description = m.optString("description", "")
+                )
+            )
+        }
+        return out
+    }
+}
