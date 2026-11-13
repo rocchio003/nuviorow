@@ -86,6 +86,7 @@ class MainActivity : Activity() {
                 true
             )
         )
+        root.addView(styleBtn())
         root.addView(
             tv(
                 "Deep link consigliato: stremio:///detail/{type}/{id}  ({type} = movie/series, {id} = id del titolo). " +
@@ -314,6 +315,24 @@ class MainActivity : Activity() {
                 refresh()
                 Scheduler.schedule(this@MainActivity)
             }
+        }
+        return b
+    }
+
+    // Bottone che alterna lo stile delle card: orizzontale 16:9 oppure locandina verticale 2:3.
+    private fun styleBtn(): Button {
+        val b = Button(this)
+        b.isAllCaps = false
+        val refresh: () -> Unit = {
+            val label = if (store.cardStyle == "landscape") "Orizzontale 16:9" else "Locandina verticale 2:3"
+            b.text = "Stile card: $label"
+        }
+        refresh()
+        fieldRefreshers.add(refresh)
+        b.setOnClickListener {
+            store.cardStyle = if (store.cardStyle == "landscape") "poster" else "landscape"
+            refresh()
+            setStatus("Stile cambiato. Premi \"Aggiorna le righe adesso\" per applicarlo.")
         }
         return b
     }
