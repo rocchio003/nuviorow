@@ -96,6 +96,7 @@ class WebConfig(
                         store.appPackage = form["pkg"] ?: ""
                         store.deepLink = form["deep"] ?: ""
                         store.maxItems = (form["max"]?.trim()?.toIntOrNull() ?: 20).coerceIn(5, 50)
+                        store.cardStyle = if (form["style"] == "poster") "poster" else "landscape"
                         onSettingsSaved()
                         "Impostazioni salvate."
                     }
@@ -152,6 +153,8 @@ class WebConfig(
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     private fun page(msg: String): String {
+        val selLandscape = if (store.cardStyle == "landscape") " selected" else ""
+        val selPoster = if (store.cardStyle == "poster") " selected" else ""
         val note = if (msg.isNotEmpty()) "<p class=\"msg\">" + esc(msg) + "</p>" else ""
         return """<!doctype html>
 <html><head><meta charset="utf-8">
@@ -159,7 +162,7 @@ class WebConfig(
 <title>Nuvio Rows</title>
 <style>
 body{font-family:sans-serif;margin:16px;background:#121212;color:#fff}
-input{width:100%;box-sizing:border-box;padding:12px;font-size:16px;margin:6px 0 10px;border-radius:6px;border:1px solid #555;background:#222;color:#fff}
+input,select{width:100%;box-sizing:border-box;padding:12px;font-size:16px;margin:6px 0 10px;border-radius:6px;border:1px solid #555;background:#222;color:#fff}
 button{padding:12px 18px;font-size:16px;border:0;border-radius:6px;background:#7C4DFF;color:#fff}
 h2{margin-top:28px}
 .msg{background:#1b5e20;padding:10px;border-radius:6px}
@@ -186,6 +189,11 @@ $note
 <input name="deep" value="${esc(store.deepLink)}">
 <small>Titoli per riga (5-50)</small>
 <input name="max" value="${store.maxItems}">
+<small>Stile card</small>
+<select name="style">
+<option value="landscape"$selLandscape>Orizzontale 16:9</option>
+<option value="poster"$selPoster>Locandina verticale 2:3</option>
+</select>
 <button>Salva</button>
 </form>
 </body></html>"""
