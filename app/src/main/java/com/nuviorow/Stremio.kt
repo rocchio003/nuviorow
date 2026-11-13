@@ -41,6 +41,7 @@ data class Meta(
     val name: String,
     val poster: String,
     val posterShape: String,
+    val background: String,
     val description: String
 )
 
@@ -87,6 +88,12 @@ object Stremio {
         return false
     }
 
+    // org.json restituisce la stringa "null" per i valori null: qui li trasformo in stringa vuota.
+    private fun str(o: JSONObject, key: String): String {
+        if (!o.has(key) || o.isNull(key)) return ""
+        return o.optString(key, "")
+    }
+
     fun fetchCatalog(base: String, type: String, id: String, limit: Int): List<Meta> {
         val url = "$base/catalog/${Uri.encode(type)}/${Uri.encode(id)}.json"
         val json = JSONObject(Net.get(url))
@@ -95,18 +102,19 @@ object Stremio {
         for (i in 0 until metas.length()) {
             if (out.size >= limit) break
             val m = metas.optJSONObject(i) ?: continue
-            val poster = m.optString("poster")
-            val mid = m.optString("id")
-            val name = m.optString("name")
-            if (poster.isEmpty() || mid.isEmpty() || name.isEmpty()) continue
+            val poster = str(m, "poster")
+            val mid = str(m, "id")
+            val name = str(m, "name")
+            if (!poster.startsWith("http") || mid.isEmpty() || name.isEmpty()) continue
             out.add(
                 Meta(
                     id = mid,
-                    type = m.optString("type", type).ifEmpty { type },
+                    type = str(m, "type").ifEmpty { type },
                     name = name,
                     poster = poster,
-                    posterShape = m.optString("posterShape", "poster"),
-                    description = m.optString("description", "")
+                    posterShape = str(m, "posterShape").ifEmpty { "poster" },
+                    background = str(m, "background"),
+                    description = str(m, "description")
                 )
             )
         }
