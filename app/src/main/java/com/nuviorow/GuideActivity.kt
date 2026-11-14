@@ -23,6 +23,7 @@ class GuideActivity : Activity() {
     private lateinit var frame: FrameLayout
     private val io = Executors.newSingleThreadExecutor()
     private var refreshing = false
+    private var guideView: GuideView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,6 +77,7 @@ class GuideActivity : Activity() {
     }
 
     private fun showMessage(text: String) {
+        guideView = null
         frame.removeAllViews()
         val tv = TextView(this)
         tv.text = text
@@ -91,12 +93,25 @@ class GuideActivity : Activity() {
 
     private fun showGuide(channels: List<GChannel>) {
         frame.removeAllViews()
-        val view = GuideView(this, channels) { ch -> openSparkle(ch) }
+        val view = GuideView(
+            this,
+            channels,
+            store.guideGroup,
+            { ch -> openSparkle(ch) },
+            { g -> store.guideGroup = g }
+        )
+        guideView = view
         frame.addView(
             view,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         )
         view.requestFocus()
+    }
+
+    override fun onBackPressed() {
+        val v = guideView
+        if (v != null && v.handleBack()) return
+        super.onBackPressed()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
