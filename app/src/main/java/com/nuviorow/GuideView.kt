@@ -79,9 +79,23 @@ class LogoCache(private val onLoaded: () -> Unit) {
  */
 class GuideView(
     context: Context,
-    private val channels: List<GChannel>,
-    private val onOpen: (GChannel) -> Unit
+    private val allChannels: List<GChannel>,
+    initialGroup: String,
+    private val onOpen: (GChannel) -> Unit,
+    private val onGroupChanged: (String) -> Unit
 ) : View(context) {
+
+    private val allLabel = "Tutti i canali"
+    private val groups: List<String> =
+        listOf(allLabel) + allChannels.map { it.group }.filter { it.isNotEmpty() }.distinct()
+    private val groupCounts: IntArray = IntArray(groups.size) { gi ->
+        if (gi == 0) allChannels.size else allChannels.count { it.group == groups[gi] }
+    }
+    private var channels: List<GChannel> = allChannels
+    private var groupIndex = 0
+    private var groupCursor = 0
+    private var groupTop = 0
+    private var groupMode = false
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float): Float = v * d
@@ -134,6 +148,63 @@ class GuideView(
         maxTime = now + 30L * 3600_000L
         viewStart = floorHalf(now - halfHour)
         selTime = now
+        val gi = groups.indexOf(initialGroup)
+        if (gi > 0) {
+            groupIndex = gi
+            groupCursor = gi
+            channels = allChannels.filter { it.group == groups[gi] }
+        }
+    }
+
+    private fun applyGroup(i: Int) {
+        groupIndex = i
+        channels = if (i == 0) allChannels else allChannels.filter { it.group == groups[i] }
+        selRow = 0
+        topRow = 0
+        onGroupChanged(if (i == 0) "" else groups[i])
+    }
+
+    private fun openGroups() {
+        if (groups.size <= 1) return
+        groupMode = true
+        groupCursor = groupIndex
+        val vr = visibleRows()
+        groupTop = (groupCursor - vr / 2).coerceAtLeast(0)
+    }
+
+    // Da chiamare quando si preme Indietro: se l'elenco dei gruppi è aperto, lo chiude.
+    fun handleBack(): Boolean {
+        if (groupMode) {
+            groupMode = false
+            invalidate()
+            return true
+        }
+        return false
+    }
+
+    private fun groupKey(keyCode: Int): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_DOWN -> groupCursor = (groupCursor + 1).coerceAtMost(groups.size - 1)
+            KeyEvent.KEYCODE_DPAD_UP -> groupCursor = (groupCursor - 1).coerceAtLeast(0)
+            KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN ->
+                groupCursor = (groupCursor + visibleRows()).coerceAtMost(groups.size - 1)
+            KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP ->
+                groupCursor = (groupCursor - visibleRows()).coerceAtLeast(0)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                applyGroup(groupCursor)
+                groupMode = false
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                // niente: si resta nell'elenco
+            }
+            else -> return false
+        }
+        val vr = visibleRows()
+        if (groupCursor < groupTop) groupTop = groupCursor
+        if (groupCursor >= groupTop + vr) groupTop = groupCursor - vr + 1
+        invalidate()
+        return true
     }
 
     private fun floorHalf(t: Long): Long = (t / halfHour) * halfHour
@@ -152,6 +223,9 @@ class GuideView(
     // ---------- tasti ----------
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (groupMode) {
+            return if (groupKey(keyCode)) true else super.onKeyDown(keyCode, event)
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_DOWN -> moveRow(1)
             KeyEvent.KEYCODE_DPAD_UP -> moveRow(-1)
@@ -177,7 +251,11 @@ class GuideView(
     }
 
     private fun moveTime(dir: Int) {
-        if (channels.isEmpty()) return
+        if (channels.isEmpty()) {
+            if (dir < 0) openGroups()
+            return
+        }
+        val now = System.currentTimeMillis()
         val progs = channels[selRow].programs
         val cur = programAt(selRow, selTime)
         if (dir > 0) {
@@ -189,13 +267,14 @@ class GuideView(
                 selTime = nxt?.start ?: (selTime + halfHour)
             }
         } else {
-            if (cur != null) {
-                val prv = progs.lastOrNull { it.stop <= cur.start }
-                selTime = prv?.start ?: (cur.start - halfHour)
-            } else {
-                val prv = progs.lastOrNull { it.stop <= selTime }
-                selTime = prv?.start ?: (selTime - halfHour)
+            // programmi precedenti ancora in corso o futuri (il passato non serve)
+            val ref = cur?.start ?: selTime
+            val prv = progs.lastOrNull { it.stop > now && it.start < ref }
+            if (prv == null) {
+                openGroups()
+                return
             }
+            selTime = prv.start
         }
         selTime = selTime.coerceIn(minTime, maxTime)
         while (selTime >= viewStart + spanMs - 600_000L && viewStart + spanMs < maxTime) viewStart += halfHour
@@ -248,7 +327,15 @@ class GuideView(
         pText.textSize = dp(14f)
         pText.textAlign = Paint.Align.LEFT
         pText.color = cTextDim
-        canvas.drawText(dayFmt.format(Date(viewStart)), dp(12f), baseline(headerH / 2f, pText), pText)
+        pText.typeface = Typeface.DEFAULT_BOLD
+        pText.color = cText
+        canvas.save()
+        canvas.clipRect(0f, 0f, chanW - dp(6f), headerH)
+        val groupTitle = if (groupMode) "Scegli un gruppo" else "\u2039 " + groups[groupIndex]
+        canvas.drawText(groupTitle, dp(12f), baseline(headerH / 2f, pText), pText)
+        canvas.restore()
+        pText.typeface = Typeface.DEFAULT
+        pText.color = cTextDim
         var t = ceilHalf(viewStart)
         pLine.color = cGrid
         while (t < viewEnd) {
@@ -326,7 +413,38 @@ class GuideView(
             pLine.strokeWidth = 0f
         }
 
+        if (groupMode) drawGroups(canvas, rowsBottom)
+
         drawDetail(canvas, w, h, now)
+    }
+
+    private fun drawGroups(canvas: Canvas, rowsBottom: Float) {
+        val panelW = dp(320f)
+        pFill.color = 0xFA2A2833.toInt()
+        canvas.drawRect(0f, headerH, panelW, rowsBottom, pFill)
+        val vr = visibleRows()
+        for (r in 0 until vr) {
+            val gi = groupTop + r
+            if (gi >= groups.size) break
+            val top = headerH + r * rowH
+            if (gi == groupCursor) {
+                pFill.color = cChanSel
+                canvas.drawRect(0f, top, panelW - dp(2f), top + rowH - dp(2f), pFill)
+            }
+            pText.textSize = dp(15f)
+            pText.typeface = if (gi == groupCursor) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            pText.color = cText
+            pText.textAlign = Paint.Align.LEFT
+            val mark = if (gi == groupIndex) "\u25CF " else ""
+            canvas.save()
+            canvas.clipRect(dp(12f), top, panelW - dp(60f), top + rowH)
+            canvas.drawText(mark + groups[gi], dp(12f), baseline(top + rowH / 2f, pText), pText)
+            canvas.restore()
+            pText.textAlign = Paint.Align.RIGHT
+            pText.color = cTextDim
+            canvas.drawText(groupCounts[gi].toString(), panelW - dp(12f), baseline(top + rowH / 2f, pText), pText)
+            pText.textAlign = Paint.Align.LEFT
+        }
     }
 
     private fun drawDetail(canvas: Canvas, w: Float, h: Float, now: Long) {
@@ -385,7 +503,9 @@ class GuideView(
         pText.textSize = dp(12f)
         pText.color = cTextDim
         pText.textAlign = Paint.Align.RIGHT
-        canvas.drawText("OK: apri Sparkle TV   ·   Menu: aggiorna guida", w - pad, top + dp(120f), pText)
+        val hint = if (groupMode) "OK o \u25B6: scegli   \u00B7   Indietro: annulla"
+        else "OK: apri Sparkle TV   \u00B7   \u25C0: gruppi   \u00B7   Menu: aggiorna"
+        canvas.drawText(hint, w - pad, top + dp(120f), pText)
         pText.textAlign = Paint.Align.LEFT
     }
 }
