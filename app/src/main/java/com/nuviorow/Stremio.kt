@@ -3,11 +3,58 @@ package com.nuviorows
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.FilterInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.GZIPInputStream
+
+class ConnStream(private val conn: HttpURLConnection, ins: InputStream) : FilterInputStream(ins) {
+    override fun close() {
+        try {
+            super.close()
+        } finally {
+            conn.disconnect()
+        }
+    }
+}
 
 object Net {
+
+    // Apre un flusso (anche file grandi). Se il contenuto è gzip lo decomprime da solo.
+    fun stream(urlStr: String, maxRedirects: Int = 5): InputStream {
+        var current = urlStr
+        for (i in 0..maxRedirects) {
+            val conn = URL(current).openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = false
+            conn.connectTimeout = 20000
+            conn.readTimeout = 60000
+            conn.setRequestProperty("User-Agent", "NuvioRows/1.0")
+            conn.setRequestProperty("Accept-Encoding", "identity")
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val loc = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (loc == null) throw IOException("Redirect senza Location")
+                current = URL(URL(current), loc).toString()
+                continue
+            }
+            if (code !in 200..299) {
+                conn.disconnect()
+                throw IOException("HTTP $code")
+            }
+            val raw = BufferedInputStream(ConnStream(conn, conn.inputStream), 65536)
+            raw.mark(2)
+            val b1 = raw.read()
+            val b2 = raw.read()
+            raw.reset()
+            return if (b1 == 0x1f && b2 == 0x8b) GZIPInputStream(raw) else raw
+        }
+        throw IOException("Troppi redirect")
+    }
+
     fun get(urlStr: String, maxRedirects: Int = 5): String {
         var current = urlStr
         for (i in 0..maxRedirects) {
