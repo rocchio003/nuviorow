@@ -15,6 +15,7 @@
 
     <queries>
         <package android:name="se.hedekonsult.sparkle" />
+        <package android:name="com.spocky.projengmenu" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
@@ -43,6 +44,41 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".NuvioWallpaperService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="tv.projectivy.plugin.WALLPAPER_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="apiVersion"
+                android:value="@integer/projectivy_api_version" />
+            <meta-data
+                android:name="uuid"
+                android:value="88a263c3-01fa-47bf-ab07-f4e3566d9157" />
+            <meta-data
+                android:name="name"
+                android:value="Nuvio Rows" />
+            <meta-data
+                android:name="settingsActivity"
+                android:value="com.nuviorows.MainActivity" />
+            <meta-data
+                android:name="mainActivity"
+                android:value="com.nuviorows.MainActivity" />
+            <meta-data
+                android:name="itemsCacheDurationMillis"
+                android:value="@integer/projectivy_cache_ms" />
+            <meta-data
+                android:name="updateMode"
+                android:value="@integer/projectivy_update_mode" />
+        </service>
+
+        <provider
+            android:name=".WallpaperFileProvider"
+            android:authorities="com.nuviorows.wallpapers"
+            android:exported="true"
+            android:grantUriPermissions="true" />
 
         <activity
             android:name=".GuideActivity"
