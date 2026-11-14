@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -119,6 +120,24 @@ class MainActivity : Activity() {
             tv(
                 "Dopo il primo aggiornamento, in Projectivy abilita le nuove righe dalle impostazioni dei canali. " +
                     "L'app poi le aggiorna da sola ogni 6 ore.",
+                12f, gray, false
+            )
+        )
+
+        // ---- Guida TV ----
+        root.addView(tv("5. Guida TV (finestra con la programmazione)", 20f, Color.WHITE, true))
+        root.addView(fieldBtn("Link M3U", { store.m3uUrl }, { store.m3uUrl = it }))
+        root.addView(fieldBtn("Link EPG XMLTV (opzionale)", { store.epgUrl }, { store.epgUrl = it }))
+        root.addView(fieldBtn("Pacchetto Sparkle TV", { store.sparklePackage }, { store.sparklePackage = it }))
+        root.addView(fieldBtn("Deep link Sparkle (opzionale)", { store.sparkleLink }, { store.sparkleLink = it }))
+        root.addView(btn("Aggiorna guida TV adesso") { runBg { GuideData.refresh(this@MainActivity) } })
+        root.addView(btn("Apri guida TV") {
+            startActivity(Intent(this@MainActivity, GuideActivity::class.java))
+        })
+        root.addView(
+            tv(
+                "Se lasci vuoto il link EPG, uso quello indicato nell'M3U (url-tvg). " +
+                    "Dopo aver impostato l'M3U premi \"Aggiorna le righe adesso\" (punto 4) per far comparire la card \"Guida TV\" nella home di Projectivy.",
                 12f, gray, false
             )
         )
@@ -304,6 +323,8 @@ class MainActivity : Activity() {
     ): Button {
         val b = Button(this)
         b.isAllCaps = false
+        b.maxLines = 1
+        b.ellipsize = android.text.TextUtils.TruncateAt.END
         val refresh: () -> Unit = {
             b.text = title + ": " + get().ifEmpty { "(vuoto)" }
         }
