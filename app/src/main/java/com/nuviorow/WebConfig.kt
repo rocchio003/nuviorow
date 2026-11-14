@@ -97,6 +97,7 @@ class WebConfig(
                         store.deepLink = form["deep"] ?: ""
                         store.maxItems = (form["max"]?.trim()?.toIntOrNull() ?: 20).coerceIn(5, 50)
                         store.cardStyle = if (form["style"] == "poster") "poster" else "landscape"
+                        store.tmdbKey = form["tmdb"] ?: ""
                         store.m3uUrl = form["m3u"] ?: ""
                         store.epgUrl = form["epg"] ?: ""
                         store.sparklePackage = form["sparkle"] ?: ""
@@ -193,6 +194,8 @@ $note
 <input name="deep" value="${esc(store.deepLink)}">
 <small>Titoli per riga (5-50)</small>
 <input name="max" value="${store.maxItems}">
+<small>Chiave API TMDB v3 (sfondo dinamico, trama in italiano)</small>
+<input name="tmdb" value="${esc(store.tmdbKey)}">
 <small>Link M3U (guida TV)</small>
 <input name="m3u" value="${esc(store.m3uUrl)}">
 <small>Link EPG XMLTV (opzionale)</small>

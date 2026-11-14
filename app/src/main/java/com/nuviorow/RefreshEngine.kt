@@ -52,6 +52,7 @@ object RefreshEngine {
         }
 
         val newIds = mutableListOf<Long>()
+        val index = ArrayList<CardIndex.Entry>()
         var ok = 0
         val errors = mutableListOf<String>()
 
@@ -67,7 +68,7 @@ object RefreshEngine {
                     newIds.add(channelId)
                 }
                 val metas = Stremio.fetchCatalog(addon.baseUrl, cat.type, cat.id, store.maxItems)
-                replacePrograms(ctx, store, channelId, metas)
+                replacePrograms(ctx, store, channelId, metas, index)
                 ok++
             } catch (ex: Exception) {
                 errors.add("${cat.name}: ${ex.message}")
@@ -83,6 +84,13 @@ object RefreshEngine {
         }
 
         store.saveChannelIds(channelIds)
+        if (index.isNotEmpty()) {
+            try {
+                CardIndex.save(ctx, index)
+            } catch (ex: Exception) {
+                // l'indice serve solo allo sfondo dinamico
+            }
+        }
 
         val msg = when {
             wanted.isEmpty() -> "Nessun catalogo selezionato: righe rimosse dalla home."
@@ -158,7 +166,13 @@ object RefreshEngine {
         return id
     }
 
-    private fun replacePrograms(ctx: Context, store: Store, channelId: Long, metas: List<Meta>) {
+    private fun replacePrograms(
+        ctx: Context,
+        store: Store,
+        channelId: Long,
+        metas: List<Meta>,
+        index: MutableList<CardIndex.Entry>
+    ) {
         val resolver = ctx.contentResolver
         resolver.delete(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), null, null)
         val landscape = store.cardStyle == "landscape"
@@ -188,6 +202,7 @@ object RefreshEngine {
                 .setPosterArtAspectRatio(ratio)
                 .setIntent(programIntent(ctx, store, m))
                 .setInternalProviderId(m.id)
+            index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
             if (m.description.isNotEmpty()) builder.setDescription(m.description.take(300))
             resolver.insert(
                 TvContractCompat.PreviewPrograms.CONTENT_URI,

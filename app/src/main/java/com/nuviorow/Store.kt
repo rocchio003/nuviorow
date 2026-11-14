@@ -54,6 +54,11 @@ class Store(context: Context) {
         get() = sp.getString("sparkleLink", "") ?: ""
         set(v) = sp.edit().putString("sparkleLink", v.trim()).apply()
 
+    // Chiave API TMDB v3 (titolo e trama in italiano per lo sfondo dinamico)
+    var tmdbKey: String
+        get() = sp.getString("tmdbKey", "") ?: ""
+        set(v) = sp.edit().putString("tmdbKey", v.trim()).apply()
+
     // Gruppo selezionato nella guida TV ("" = tutti i canali)
     var guideGroup: String
         get() = sp.getString("guideGroup", "") ?: ""

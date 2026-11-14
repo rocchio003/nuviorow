@@ -142,6 +142,24 @@ class MainActivity : Activity() {
             )
         )
 
+        // ---- Sfondo dinamico ----
+        root.addView(tv("6. Sfondo dinamico di Projectivy", 20f, Color.WHITE, true))
+        root.addView(
+            fieldBtn(
+                "Chiave API TMDB (v3)",
+                { store.tmdbKey },
+                { store.tmdbKey = it },
+                shown = { if (it.length > 6) it.take(4) + "..." else "***" }
+            )
+        )
+        root.addView(
+            tv(
+                "In Projectivy: Impostazioni, Aspetto, Sfondo, poi scegli il plugin \"Nuvio Rows\". " +
+                    "Con la chiave TMDB titolo e trama sono in italiano; senza chiave uso i dati dell'addon.",
+                12f, gray, false
+            )
+        )
+
         renderAddons()
         requestTvPermissions()
         Scheduler.schedule(this)
@@ -319,14 +337,16 @@ class MainActivity : Activity() {
         title: String,
         get: () -> String,
         set: (String) -> Unit,
-        numeric: Boolean = false
+        numeric: Boolean = false,
+        shown: (String) -> String = { it }
     ): Button {
         val b = Button(this)
         b.isAllCaps = false
         b.maxLines = 1
         b.ellipsize = android.text.TextUtils.TruncateAt.END
         val refresh: () -> Unit = {
-            b.text = title + ": " + get().ifEmpty { "(vuoto)" }
+            val v = get()
+            b.text = title + ": " + (if (v.isEmpty()) "(vuoto)" else shown(v))
         }
         refresh()
         fieldRefreshers.add(refresh)
