@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <integer name="projectivy_api_version">1</integer>
+    <!-- CARD_FOCUSED (4) + PROGRAM_CARD_FOCUSED (8) -->
+    <integer name="projectivy_update_mode">12</integer>
+    <integer name="projectivy_cache_ms">600000</integer>
+</resources>
