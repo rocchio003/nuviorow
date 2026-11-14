@@ -14,6 +14,11 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
     override fun doWork(): Result {
         return try {
             RefreshEngine.refresh(applicationContext)
+            try {
+                if (Store(applicationContext).m3uUrl.isNotEmpty()) GuideData.refresh(applicationContext)
+            } catch (e: Exception) {
+                // la guida si riprova alla prossima esecuzione
+            }
             Result.success()
         } catch (e: Exception) {
             Result.retry()
