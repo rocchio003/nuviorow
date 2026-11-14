@@ -54,6 +54,11 @@ class Store(context: Context) {
         get() = sp.getString("sparkleLink", "") ?: ""
         set(v) = sp.edit().putString("sparkleLink", v.trim()).apply()
 
+    // Gruppo selezionato nella guida TV ("" = tutti i canali)
+    var guideGroup: String
+        get() = sp.getString("guideGroup", "") ?: ""
+        set(v) = sp.edit().putString("guideGroup", v).apply()
+
     var maxItems: Int
         get() = sp.getInt("maxItems", 20)
         set(v) = sp.edit().putInt("maxItems", v).apply()
