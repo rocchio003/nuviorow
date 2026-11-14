@@ -97,6 +97,10 @@ class WebConfig(
                         store.deepLink = form["deep"] ?: ""
                         store.maxItems = (form["max"]?.trim()?.toIntOrNull() ?: 20).coerceIn(5, 50)
                         store.cardStyle = if (form["style"] == "poster") "poster" else "landscape"
+                        store.m3uUrl = form["m3u"] ?: ""
+                        store.epgUrl = form["epg"] ?: ""
+                        store.sparklePackage = form["sparkle"] ?: ""
+                        store.sparkleLink = form["sparklelink"] ?: ""
                         onSettingsSaved()
                         "Impostazioni salvate."
                     }
@@ -189,6 +193,14 @@ $note
 <input name="deep" value="${esc(store.deepLink)}">
 <small>Titoli per riga (5-50)</small>
 <input name="max" value="${store.maxItems}">
+<small>Link M3U (guida TV)</small>
+<input name="m3u" value="${esc(store.m3uUrl)}">
+<small>Link EPG XMLTV (opzionale)</small>
+<input name="epg" value="${esc(store.epgUrl)}">
+<small>Pacchetto Sparkle TV</small>
+<input name="sparkle" value="${esc(store.sparklePackage)}">
+<small>Deep link Sparkle (opzionale, segnaposto {name} {id} {url})</small>
+<input name="sparklelink" value="${esc(store.sparkleLink)}">
 <small>Stile card</small>
 <select name="style">
 <option value="landscape"$selLandscape>Orizzontale 16:9</option>
