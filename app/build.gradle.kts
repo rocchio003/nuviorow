@@ -32,6 +32,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":api"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.tvprovider:tvprovider:1.0.0")
     implementation("androidx.work:work-runtime:2.9.0")
