@@ -37,6 +37,23 @@ class Store(context: Context) {
         get() = sp.getString("cardStyle", "landscape") ?: "landscape"
         set(v) = sp.edit().putString("cardStyle", v).apply()
 
+    var m3uUrl: String
+        get() = sp.getString("m3uUrl", "") ?: ""
+        set(v) = sp.edit().putString("m3uUrl", v.trim()).apply()
+
+    var epgUrl: String
+        get() = sp.getString("epgUrl", "") ?: ""
+        set(v) = sp.edit().putString("epgUrl", v.trim()).apply()
+
+    var sparklePackage: String
+        get() = (sp.getString("sparklePackage", "") ?: "").ifBlank { "se.hedekonsult.sparkle" }
+        set(v) = sp.edit().putString("sparklePackage", v.trim()).apply()
+
+    // Opzionale: deep link per aprire un canale in Sparkle TV. Segnaposto: {name} {id} {url}
+    var sparkleLink: String
+        get() = sp.getString("sparkleLink", "") ?: ""
+        set(v) = sp.edit().putString("sparkleLink", v.trim()).apply()
+
     var maxItems: Int
         get() = sp.getInt("maxItems", 20)
         set(v) = sp.edit().putInt("maxItems", v).apply()
