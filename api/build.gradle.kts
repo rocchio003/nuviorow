@@ -1,29 +1,25 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
 plugins {
-   alias(libs.plugins.android.library)
-   alias(libs.plugins.kotlin.parcelize)
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.parcelize")
 }
 
 android {
     namespace = "tv.projectivy.plugin.wallpaperprovider.api"
-    compileSdk = libs.versions.compileSdk.get().toInt()
+    compileSdk = 34
+
+    defaultConfig {
+        minSdk = 26
+        consumerProguardFiles("consumer-rules.pro")
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    defaultConfig {
-        minSdk = libs.versions.minSdk.get().toInt()
-
-        consumerProguardFiles("consumer-rules.pro")
+    kotlinOptions {
+        jvmTarget = "17"
     }
 
     buildFeatures {
@@ -32,5 +28,5 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.annotation)
+    implementation("androidx.annotation:annotation:1.8.0")
 }
