@@ -11,8 +11,23 @@ android {
         applicationId = "com.nuviorows"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // il numero cresce a ogni build su GitHub, così Android accetta l'aggiornamento
+        val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = run
+        versionName = "1.$run"
+    }
+
+    // Chiave fissa: tutte le build sono firmate allo stesso modo e si installano come aggiornamento.
+    signingConfigs {
+        getByName("debug") {
+            val ks = rootProject.file("debug.keystore")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
