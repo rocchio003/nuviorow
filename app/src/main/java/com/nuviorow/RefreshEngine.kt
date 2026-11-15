@@ -203,7 +203,6 @@ object RefreshEngine {
                 .setIntent(programIntent(ctx, store, m))
                 .setInternalProviderId(m.id)
             index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
-            if (m.description.isNotEmpty()) builder.setDescription(m.description.take(300))
             resolver.insert(
                 TvContractCompat.PreviewPrograms.CONTENT_URI,
                 builder.build().toContentValues()
