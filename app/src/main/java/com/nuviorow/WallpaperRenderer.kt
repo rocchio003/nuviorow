@@ -134,6 +134,7 @@ object WallpaperRenderer {
             val blurPaint = Paint(Paint.FILTER_BITMAP_FLAG)
             blurPaint.alpha = 110
             drawCover(c, small, RectF(W * 0.30f, 0f, W.toFloat(), H * 0.68f), blurPaint)
+            small.recycle()
             val ph = H * 0.60f
             val pw = ph * poster.width / poster.height
             val right = W - 150f
@@ -224,10 +225,12 @@ object WallpaperRenderer {
             c.clipPath(clip)
             c.drawBitmap(img, null, dst, paint)
             c.restore()
+            img.recycle()
         } else if (icon != null) {
             val s = 420
             val img = drawableToBitmap(icon, s, s)
             c.drawBitmap(img, null, RectF(cx - s / 2f, cy - s / 2f, cx + s / 2f, cy + s / 2f), paint)
+            img.recycle()
         }
 
         val tp = textPaint(86f, Color.WHITE, true)

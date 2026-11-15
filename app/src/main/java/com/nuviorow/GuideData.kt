@@ -1,6 +1,7 @@
 package com.nuviorows
 
 import android.content.Context
+import android.os.Process
 import android.util.JsonReader
 import android.util.JsonWriter
 import android.util.Xml
@@ -55,6 +56,11 @@ object GuideData {
     // Scarica M3U ed EPG, e salva la guida in una cache locale. Da chiamare in background.
     @Synchronized
     fun refresh(ctx: Context): String {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+        } catch (e: Exception) {
+            // ignora
+        }
         val store = Store(ctx.applicationContext)
         val m3uUrl = store.m3uUrl
         if (m3uUrl.isEmpty()) return "Link M3U non impostato."

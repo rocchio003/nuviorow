@@ -9,6 +9,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import androidx.tvprovider.media.tv.TvContractCompat
 import tv.projectivy.plugin.wallpaperprovider.api.Event
 import tv.projectivy.plugin.wallpaperprovider.api.IWallpaperProviderService
@@ -21,7 +22,9 @@ import java.io.FileNotFoundException
 import java.security.MessageDigest
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
@@ -88,8 +91,26 @@ object WallpaperEngine {
     private const val RENDER_VERSION = "v1"
     private const val MAX_FILES = 150
 
-    private val pool = Executors.newFixedThreadPool(2)
-    private val inflight = ConcurrentHashMap<String, FutureTask<Boolean>>()
+    // Aspetto 250 ms prima di disegnare: se l'utente scorre veloce non lavoro per le card già superate.
+    private const val DEBOUNCE_MS = 250L
+    private const val WAIT_MS = 150L
+
+    private const val OK = 1
+    private const val FAIL = 0
+    private const val SKIPPED = -1
+
+    // Un solo thread, a bassa priorità, per non rubare CPU all'interfaccia della TV.
+    private val pool: ExecutorService = Executors.newSingleThreadExecutor(ThreadFactory { r ->
+        Thread {
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            } catch (e: Exception) {
+                // ignora
+            }
+            r.run()
+        }
+    })
+    private val inflight = ConcurrentHashMap<String, FutureTask<Int>>()
     private val failed: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     @Volatile
@@ -116,14 +137,8 @@ object WallpaperEngine {
     private fun hash(s: String): String =
         MessageDigest.getInstance("MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
-    private fun wallpaper(ctx: Context, f: File, title: String): Wallpaper {
+    private fun wallpaper(f: File, title: String): Wallpaper {
         val uri = Uri.parse("content://$AUTHORITY/${f.name}")
-        try {
-            ctx.grantUriPermission(PROJECTIVY_PKG, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } catch (e: Exception) {
-            // il provider è comunque esportato
-        }
-        f.setLastModified(System.currentTimeMillis())
         return Wallpaper(
             uri = uri.toString(),
             type = WallpaperType.IMAGE,
@@ -135,8 +150,12 @@ object WallpaperEngine {
 
     private fun neutral(ctx: Context): List<Wallpaper> {
         val f = File(dir(ctx), "neutral_$RENDER_VERSION.jpg")
-        if (!f.exists()) WallpaperRenderer.save(WallpaperRenderer.neutral(), f)
-        return if (f.exists()) listOf(wallpaper(ctx, f, "Nuvio Rows")) else emptyList()
+        if (!f.exists()) {
+            val bmp = WallpaperRenderer.neutral()
+            WallpaperRenderer.save(bmp, f)
+            bmp.recycle()
+        }
+        return if (f.exists()) listOf(wallpaper(f, "Nuvio Rows")) else emptyList()
     }
 
     private fun prune(ctx: Context) {
@@ -161,6 +180,62 @@ object WallpaperEngine {
         }
     }
 
+    /**
+     * Se il file c'è già lo restituisce subito. Altrimenti lo fa disegnare in background
+     * (dopo una breve attesa) e, se in 150 ms non è pronto, lascia lo sfondo attuale:
+     * a disegno finito avvisa Projectivy, che richiede lo sfondo e trova il file pronto.
+     */
+    private fun serve(ctx: Context, key: String, title: String, render: (File) -> Int): List<Wallpaper> {
+        latest = key
+        val f = File(dir(ctx), "$key.jpg")
+        if (f.exists()) {
+            f.setLastModified(System.currentTimeMillis())
+            return listOf(wallpaper(f, title))
+        }
+        if (failed.contains(key)) return neutral(ctx)
+
+        val task = FutureTask<Int>(Callable {
+            try {
+                Thread.sleep(DEBOUNCE_MS)
+            } catch (e: InterruptedException) {
+                // ignora
+            }
+            if (latest != key) SKIPPED else render(f)
+        })
+        val existing = inflight.putIfAbsent(key, task)
+        val fut: Future<Int>
+        if (existing == null) {
+            fut = task
+            pool.execute {
+                task.run()
+                val r = try {
+                    task.get()
+                } catch (e: Exception) {
+                    FAIL
+                }
+                if (r == FAIL) failed.add(key)
+                inflight.remove(key)
+                if (r != SKIPPED && latest == key) notifyUpdate(ctx)
+            }
+        } else {
+            fut = existing
+        }
+
+        val r = try {
+            fut.get(WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            return emptyList()
+        } catch (e: Exception) {
+            FAIL
+        }
+        if (r == OK && f.exists()) return listOf(wallpaper(f, title))
+        if (r == FAIL) {
+            failed.add(key)
+            return neutral(ctx)
+        }
+        return emptyList()
+    }
+
     // ---------- card di app ----------
 
     private fun forApp(ctx: Context, ev: Event.CardFocused): List<Wallpaper> {
@@ -181,14 +256,17 @@ object WallpaperEngine {
 
     private fun appWallpaper(ctx: Context, pkg: String, label: String, dark: Int): List<Wallpaper> {
         val key = "a_" + hash("$RENDER_VERSION|$pkg|$label|$dark")
-        latest = key
-        val f = File(dir(ctx), "$key.jpg")
-        if (!f.exists()) {
-            val ok = WallpaperRenderer.save(WallpaperRenderer.composeApp(ctx, pkg, label, dark), f)
-            if (!ok) return neutral(ctx)
-            prune(ctx)
+        return serve(ctx, key, label) { out ->
+            val bmp = WallpaperRenderer.composeApp(ctx, pkg, label, dark)
+            val ok = WallpaperRenderer.save(bmp, out)
+            bmp.recycle()
+            if (ok) {
+                prune(ctx)
+                OK
+            } else {
+                FAIL
+            }
         }
-        return listOf(wallpaper(ctx, f, label))
     }
 
     // ---------- card di film e serie ----------
@@ -204,45 +282,10 @@ object WallpaperEngine {
 
         val store = Store(ctx)
         val key = "p_" + hash("$RENDER_VERSION|$title|${ev.iconUri}|${store.tmdbKey.isNotEmpty()}")
-        latest = key
-        val f = File(dir(ctx), "$key.jpg")
-        if (f.exists()) return listOf(wallpaper(ctx, f, title))
-        if (failed.contains(key)) return neutral(ctx)
-
-        val task = FutureTask<Boolean>(Callable { renderProgram(ctx, ev, f) })
-        val existing = inflight.putIfAbsent(key, task)
-        val fut: Future<Boolean>
-        if (existing == null) {
-            fut = task
-            pool.execute {
-                task.run()
-                val ok = try {
-                    task.get()
-                } catch (e: Exception) {
-                    false
-                }
-                if (!ok) failed.add(key)
-                inflight.remove(key)
-                if (latest == key) notifyUpdate(ctx)
-            }
-        } else {
-            fut = existing
-        }
-
-        // Se l'immagine non è pronta in fretta, tengo lo sfondo attuale: appena pronta avviso Projectivy.
-        val ok = try {
-            fut.get(400, TimeUnit.MILLISECONDS)
-        } catch (e: TimeoutException) {
-            return emptyList()
-        } catch (e: Exception) {
-            false
-        }
-        if (ok && f.exists()) return listOf(wallpaper(ctx, f, title))
-        failed.add(key)
-        return neutral(ctx)
+        return serve(ctx, key, title) { out -> renderProgram(ctx, ev, key, out) }
     }
 
-    private fun renderProgram(ctx: Context, ev: Event.ProgramCardFocused, out: File): Boolean {
+    private fun renderProgram(ctx: Context, ev: Event.ProgramCardFocused, key: String, out: File): Int {
         val store = Store(ctx)
         val rawTitle = ev.title?.trim().orEmpty()
         val entry = CardIndex.find(ctx, ev.iconUri, rawTitle)
@@ -266,6 +309,7 @@ object WallpaperEngine {
                 null
             }
         }
+        if (latest != key) return SKIPPED
 
         val title = info?.title?.takeIf { it.isNotBlank() } ?: entry?.name ?: Tmdb.cleanTitle(rawTitle)
         val plot = info?.overview?.takeIf { it.isNotBlank() } ?: entry?.description.orEmpty()
@@ -279,14 +323,27 @@ object WallpaperEngine {
             ?: entry?.poster?.takeIf { it.startsWith("http") }
             ?: ev.iconUri?.takeIf { it.startsWith("http") }
 
-        if (backUrl == null && posterUrl == null && plot.isEmpty()) return false
+        if (backUrl == null && posterUrl == null && plot.isEmpty()) return FAIL
 
         val back = if (backUrl != null) Imgs.load(backUrl, 1280) else null
+        if (latest != key) {
+            back?.recycle()
+            return SKIPPED
+        }
         val poster = if (back == null && posterUrl != null) Imgs.load(posterUrl, 600) else null
-        if (back == null && poster == null && plot.isEmpty()) return false
+        if (back == null && poster == null && plot.isEmpty()) return FAIL
+        if (latest != key) {
+            back?.recycle()
+            poster?.recycle()
+            return SKIPPED
+        }
 
-        val ok = WallpaperRenderer.save(WallpaperRenderer.composeInfo(title, meta, plot, back, poster), out)
+        val composed = WallpaperRenderer.composeInfo(title, meta, plot, back, poster)
+        val ok = WallpaperRenderer.save(composed, out)
+        composed.recycle()
+        back?.recycle()
+        poster?.recycle()
         if (ok) prune(ctx)
-        return ok
+        return if (ok) OK else FAIL
     }
 }

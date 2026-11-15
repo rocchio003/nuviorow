@@ -1,6 +1,8 @@
 package com.nuviorows
 
+import android.content.ContentProviderOperation
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -110,8 +112,8 @@ object RefreshEngine {
             channelIds[GUIDE_KEY] = channelId
             newIds.add(channelId)
         }
+        if (channelHasPrograms(ctx, channelId)) return
         val resolver = ctx.contentResolver
-        resolver.delete(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), null, null)
         val intent = Intent(ctx, GuideActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val program = PreviewProgram.Builder()
             .setChannelId(channelId)
@@ -166,6 +168,18 @@ object RefreshEngine {
         return id
     }
 
+    private fun channelHasPrograms(ctx: Context, channelId: Long): Boolean {
+        return try {
+            ctx.contentResolver.query(
+                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
+                arrayOf(BaseColumns._ID),
+                null, null, null
+            )?.use { it.count > 0 } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun replacePrograms(
         ctx: Context,
         store: Store,
@@ -174,8 +188,10 @@ object RefreshEngine {
         index: MutableList<CardIndex.Entry>
     ) {
         val resolver = ctx.contentResolver
-        resolver.delete(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), null, null)
         val landscape = store.cardStyle == "landscape"
+        val values = ArrayList<ContentValues>()
+        val sig = StringBuilder()
+
         for (m in metas) {
             val type = when (m.type) {
                 "movie" -> TvContractCompat.PreviewPrograms.TYPE_MOVIE
@@ -194,7 +210,7 @@ object RefreshEngine {
                     else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
                 }
             }
-            val builder = PreviewProgram.Builder()
+            val program = PreviewProgram.Builder()
                 .setChannelId(channelId)
                 .setType(type)
                 .setTitle(m.name)
@@ -202,12 +218,35 @@ object RefreshEngine {
                 .setPosterArtAspectRatio(ratio)
                 .setIntent(programIntent(ctx, store, m))
                 .setInternalProviderId(m.id)
+                .build()
             index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
-            resolver.insert(
-                TvContractCompat.PreviewPrograms.CONTENT_URI,
-                builder.build().toContentValues()
-            )
+            values.add(program.toContentValues())
+            sig.append(m.id).append('|').append(m.name).append('|').append(image).append('|').append(ratio).append(';')
         }
+
+        // Se i titoli sono gli stessi dell'ultima volta non tocco la home: evita che il launcher la ricarichi ogni volta.
+        val sigStr = sig.toString().hashCode().toString() + ":" + sig.length
+        val sp = ctx.getSharedPreferences("sigs", Context.MODE_PRIVATE)
+        val sigKey = "ch$channelId"
+        if (sp.getString(sigKey, null) == sigStr && channelHasPrograms(ctx, channelId)) return
+
+        val programsUri = TvContractCompat.buildPreviewProgramsUriForChannel(channelId)
+        try {
+            val ops = ArrayList<ContentProviderOperation>()
+            ops.add(ContentProviderOperation.newDelete(programsUri).build())
+            for (cv in values) {
+                ops.add(
+                    ContentProviderOperation.newInsert(TvContractCompat.PreviewPrograms.CONTENT_URI)
+                        .withValues(cv)
+                        .build()
+                )
+            }
+            resolver.applyBatch(TvContractCompat.AUTHORITY, ops)
+        } catch (e: Exception) {
+            resolver.delete(programsUri, null, null)
+            for (cv in values) resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, cv)
+        }
+        sp.edit().putString(sigKey, sigStr).apply()
     }
 
     private fun launchIntent(ctx: Context, store: Store): Intent {
