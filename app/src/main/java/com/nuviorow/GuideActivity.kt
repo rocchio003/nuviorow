@@ -3,7 +3,6 @@ package com.nuviorows
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
@@ -31,10 +30,8 @@ class GuideActivity : Activity() {
 
         val dm = resources.displayMetrics
         frame = FrameLayout(this)
-        val bg = GradientDrawable()
-        bg.setColor(0xFF1C1B22.toInt())
-        bg.cornerRadius = 20f * dm.density
-        frame.background = bg
+        frame.background = GlassPanelDrawable(dm.density)
+        frame.clipToOutline = true
         setContentView(frame)
         window.setLayout((dm.widthPixels * 0.93f).toInt(), (dm.heightPixels * 0.90f).toInt())
 

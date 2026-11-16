@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.LruCache
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -12,7 +13,21 @@ import java.io.IOException
 
 /** Scarica e decodifica immagini (ridimensionate in lettura per non pesare sulla memoria). */
 object Imgs {
+
+    // cache in memoria: passando da una card all'altra le immagini sono già pronte
+    private val memory = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
     fun load(url: String, targetW: Int): Bitmap? {
+        val key = url + "@" + targetW
+        memory.get(key)?.let { return it }
+        val bmp = download(url, targetW) ?: return null
+        memory.put(key, bmp)
+        return bmp
+    }
+
+    private fun download(url: String, targetW: Int): Bitmap? {
         return try {
             val out = ByteArrayOutputStream()
             Net.stream(url).use { input ->
@@ -120,6 +135,19 @@ object CardIndex {
         val n = norm(title)
         if (n.isEmpty()) return null
         return list.firstOrNull { norm(it.name) == n }
+    }
+
+    // Voci vicine nella stessa riga: servono a scaldare le immagini della card successiva.
+    fun around(ctx: Context, entry: Entry, span: Int): List<Entry> {
+        val list = entries(ctx)
+        val i = list.indexOfFirst { it.id == entry.id && it.name == entry.name }
+        if (i < 0) return emptyList()
+        val out = ArrayList<Entry>(span * 2)
+        for (j in (i - span)..(i + span)) {
+            if (j == i || j < 0 || j >= list.size) continue
+            out.add(list[j])
+        }
+        return out
     }
 }
 

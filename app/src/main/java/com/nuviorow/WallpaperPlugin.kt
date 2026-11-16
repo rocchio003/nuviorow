@@ -88,7 +88,7 @@ object WallpaperEngine {
     const val AUTHORITY = "com.nuviorows.wallpapers"
     const val PROVIDER_UUID = "88a263c3-01fa-47bf-ab07-f4e3566d9157"
     private const val PROJECTIVY_PKG = "com.spocky.projengmenu"
-    private const val RENDER_VERSION = "v1"
+    private const val RENDER_VERSION = "v2"
     private const val MAX_FILES = 150
 
     // Aspetto 250 ms prima di disegnare: se l'utente scorre veloce non lavoro per le card già superate.
@@ -110,6 +110,7 @@ object WallpaperEngine {
             r.run()
         }
     })
+    private val prefetchPool = Executors.newSingleThreadExecutor()
     private val inflight = ConcurrentHashMap<String, FutureTask<Int>>()
     private val failed: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -152,10 +153,28 @@ object WallpaperEngine {
         val f = File(dir(ctx), "neutral_$RENDER_VERSION.jpg")
         if (!f.exists()) {
             val bmp = WallpaperRenderer.neutral()
-            WallpaperRenderer.save(bmp, f)
-            bmp.recycle()
+            try {
+                WallpaperRenderer.save(bmp, f)
+            } finally {
+                WallpaperRenderer.release(bmp)
+            }
         }
         return if (f.exists()) listOf(wallpaper(f, "Nuvio Rows")) else emptyList()
+    }
+
+    // Scalda la cache immagini delle card vicine: quando l'utente si sposta, lo sfondo è già pronto.
+    private fun prefetchAround(ctx: Context, entry: CardIndex.Entry?) {
+        if (entry == null) return
+        prefetchPool.execute {
+            for (e in CardIndex.around(ctx, entry, 1)) {
+                val url = when {
+                    e.background.startsWith("http") -> e.background
+                    e.poster.startsWith("http") -> e.poster
+                    else -> null
+                }
+                if (url != null) Imgs.load(url, 960)
+            }
+        }
     }
 
     private fun prune(ctx: Context) {
@@ -258,8 +277,11 @@ object WallpaperEngine {
         val key = "a_" + hash("$RENDER_VERSION|$pkg|$label|$dark")
         return serve(ctx, key, label) { out ->
             val bmp = WallpaperRenderer.composeApp(ctx, pkg, label, dark)
-            val ok = WallpaperRenderer.save(bmp, out)
-            bmp.recycle()
+            val ok = try {
+                WallpaperRenderer.save(bmp, out)
+            } finally {
+                WallpaperRenderer.release(bmp)
+            }
             if (ok) {
                 prune(ctx)
                 OK
@@ -289,6 +311,7 @@ object WallpaperEngine {
         val store = Store(ctx)
         val rawTitle = ev.title?.trim().orEmpty()
         val entry = CardIndex.find(ctx, ev.iconUri, rawTitle)
+        prefetchAround(ctx, entry)
 
         val kindHint: String? = when {
             entry != null && entry.type == "series" -> "tv"
@@ -316,7 +339,7 @@ object WallpaperEngine {
         val meta = if (info != null) WallpaperRenderer.formatMeta(info) else ""
 
         val backUrl: String? = info?.backdrop?.takeIf { it.isNotEmpty() }
-            ?.let { "https://image.tmdb.org/t/p/w1280$it" }
+            ?.let { "https://image.tmdb.org/t/p/w780$it" }
             ?: entry?.background?.takeIf { it.startsWith("http") }
         val posterUrl: String? = info?.poster?.takeIf { it.isNotEmpty() }
             ?.let { "https://image.tmdb.org/t/p/w500$it" }
@@ -325,24 +348,19 @@ object WallpaperEngine {
 
         if (backUrl == null && posterUrl == null && plot.isEmpty()) return FAIL
 
-        val back = if (backUrl != null) Imgs.load(backUrl, 1280) else null
-        if (latest != key) {
-            back?.recycle()
-            return SKIPPED
-        }
+        val back = if (backUrl != null) Imgs.load(backUrl, 960) else null
+        if (latest != key) return SKIPPED
         val poster = if (back == null && posterUrl != null) Imgs.load(posterUrl, 600) else null
         if (back == null && poster == null && plot.isEmpty()) return FAIL
-        if (latest != key) {
-            back?.recycle()
-            poster?.recycle()
-            return SKIPPED
-        }
+        if (latest != key) return SKIPPED
 
+        // back e poster arrivano dalla cache in memoria di Imgs: non vanno riciclati
         val composed = WallpaperRenderer.composeInfo(title, meta, plot, back, poster)
-        val ok = WallpaperRenderer.save(composed, out)
-        composed.recycle()
-        back?.recycle()
-        poster?.recycle()
+        val ok = try {
+            WallpaperRenderer.save(composed, out)
+        } finally {
+            WallpaperRenderer.release(composed)
+        }
         if (ok) prune(ctx)
         return if (ok) OK else FAIL
     }

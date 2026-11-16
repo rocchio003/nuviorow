@@ -28,8 +28,10 @@ data class GChannel(
 object GuideData {
 
     private const val FILE_NAME = "guide.json"
-    private const val BEFORE_MS = 3L * 3600_000L
-    private const val AFTER_MS = 30L * 3600_000L
+    // La finestra visibile è di 3 ore: teniamo solo l'intorno utile, così la cache
+    // resta piccola e il parsing all'apertura della guida è molto più veloce.
+    private const val BEFORE_MS = 1L * 3600_000L
+    private const val AFTER_MS = 9L * 3600_000L
     private const val MAX_CHANNELS = 1500
     private const val MAX_M3U_ENTRIES = 20000
 
@@ -53,9 +55,22 @@ object GuideData {
         return if (f.exists()) f.lastModified() else 0L
     }
 
+    @Volatile
+    private var running = false
+
     // Scarica M3U ed EPG, e salva la guida in una cache locale. Da chiamare in background.
-    @Synchronized
     fun refresh(ctx: Context): String {
+        if (running) return "Aggiornamento guida già in corso."
+        running = true
+        return try {
+            doRefresh(ctx)
+        } finally {
+            running = false
+        }
+    }
+
+    @Synchronized
+    private fun doRefresh(ctx: Context): String {
         try {
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
         } catch (e: Exception) {

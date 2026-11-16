@@ -14,7 +14,7 @@ android {
         // il numero cresce a ogni build su GitHub, così Android accetta l'aggiornamento
         val run = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = run
-        versionName = "1.$run"
+        versionName = "1.0.$run"
     }
 
     // Chiave fissa: tutte le build sono firmate allo stesso modo e si installano come aggiornamento.

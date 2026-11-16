@@ -15,12 +15,18 @@ import androidx.tvprovider.media.tv.Channel
 import androidx.tvprovider.media.tv.ChannelLogoUtils
 import androidx.tvprovider.media.tv.PreviewProgram
 import androidx.tvprovider.media.tv.TvContractCompat
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 
 data class RefreshResult(val newChannelIds: List<Long>, val message: String)
 
 object RefreshEngine {
 
     private const val GUIDE_KEY = "__guide__"
+
+    private class CatalogJob(val addon: AddonCfg, val catalog: CatalogCfg, val channelId: Long)
+
+    private class OldProgram(val rowId: Long, val title: String?, val image: String?)
 
     @Synchronized
     fun refresh(context: Context): RefreshResult {
@@ -56,8 +62,10 @@ object RefreshEngine {
         val newIds = mutableListOf<Long>()
         val index = ArrayList<CardIndex.Entry>()
         var ok = 0
-        val errors = mutableListOf<String>()
+        val errors = java.util.Collections.synchronizedList(ArrayList<String>())
 
+        // 1) canali: poche query locali, meglio farle prima e in sequenza
+        val jobs = ArrayList<CatalogJob>()
         for ((key, pair) in wanted) {
             val addon = pair.first
             val cat = pair.second
@@ -69,12 +77,41 @@ object RefreshEngine {
                     channelIds[key] = channelId
                     newIds.add(channelId)
                 }
-                val metas = Stremio.fetchCatalog(addon.baseUrl, cat.type, cat.id, store.maxItems)
-                replacePrograms(ctx, store, channelId, metas, index)
-                ok++
+                jobs.add(CatalogJob(addon, cat, channelId))
             } catch (ex: Exception) {
                 errors.add("${cat.name}: ${ex.message}")
             }
+        }
+
+        // 2) cataloghi in parallelo: la rete è il collo di bottiglia
+        val perCatalog = arrayOfNulls<List<CardIndex.Entry>>(jobs.size)
+        if (jobs.isNotEmpty()) {
+            val pool = Executors.newFixedThreadPool(minOf(4, jobs.size))
+            try {
+                val tasks = jobs.mapIndexed { i, job ->
+                    Callable<String?> {
+                        try {
+                            val metas = Stremio.fetchCatalog(
+                                job.addon.baseUrl, job.catalog.type, job.catalog.id, store.maxItems
+                            )
+                            val local = ArrayList<CardIndex.Entry>(metas.size)
+                            replacePrograms(ctx, store, job.channelId, metas, local)
+                            perCatalog[i] = local
+                            null
+                        } catch (ex: Exception) {
+                            "${job.catalog.name}: ${ex.message}"
+                        }
+                    }
+                }
+                for (f in pool.invokeAll(tasks)) {
+                    val error = f.get()
+                    if (error == null) ok++ else errors.add(error)
+                }
+            } finally {
+                pool.shutdown()
+            }
+            // riordino come i cataloghi, così cards.json resta stabile tra un refresh e l'altro
+            for (l in perCatalog) if (l != null) index.addAll(l)
         }
 
         if (guideWanted) {
@@ -112,6 +149,7 @@ object RefreshEngine {
             channelIds[GUIDE_KEY] = channelId
             newIds.add(channelId)
         }
+        // se la card della guida c'è già non la ricreo: evita di far ricaricare la home
         if (channelHasPrograms(ctx, channelId)) return
         val resolver = ctx.contentResolver
         val intent = Intent(ctx, GuideActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -126,6 +164,18 @@ object RefreshEngine {
             .setInternalProviderId("guide")
             .build()
         resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, program.toContentValues())
+    }
+
+    private fun channelHasPrograms(ctx: Context, channelId: Long): Boolean {
+        return try {
+            ctx.contentResolver.query(
+                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
+                arrayOf(BaseColumns._ID),
+                null, null, null
+            )?.use { it.count > 0 } ?: false
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun typeLabel(type: String): String = when (type) {
@@ -168,18 +218,6 @@ object RefreshEngine {
         return id
     }
 
-    private fun channelHasPrograms(ctx: Context, channelId: Long): Boolean {
-        return try {
-            ctx.contentResolver.query(
-                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
-                arrayOf(BaseColumns._ID),
-                null, null, null
-            )?.use { it.count > 0 } ?: false
-        } catch (e: Exception) {
-            false
-        }
-    }
-
     private fun replacePrograms(
         ctx: Context,
         store: Store,
@@ -188,9 +226,52 @@ object RefreshEngine {
         index: MutableList<CardIndex.Entry>
     ) {
         val resolver = ctx.contentResolver
+        val channelUri = TvContractCompat.buildPreviewProgramsUriForChannel(channelId)
         val landscape = store.cardStyle == "landscape"
-        val values = ArrayList<ContentValues>()
-        val sig = StringBuilder()
+
+        // Righe già pubblicate per questo canale: servono ad aggiornare solo ciò che cambia,
+        // così gli ID restano stabili e il launcher non ricarica tutte le copertine.
+        // Se il TvProvider non supporta la query, ricado su delete + insert.
+        var canDiff = false
+        val published = HashMap<String, OldProgram>()
+        try {
+            resolver.query(
+                channelUri,
+                arrayOf(BaseColumns._ID, "internal_provider_id", "title", "poster_art_uri"),
+                null, null, null
+            )?.use { c ->
+                val iId = c.getColumnIndex(BaseColumns._ID)
+                val iPid = c.getColumnIndex("internal_provider_id")
+                val iTitle = c.getColumnIndex("title")
+                val iImage = c.getColumnIndex("poster_art_uri")
+                // senza la colonna dell'id interno non posso riconoscere le card: delete + insert
+                if (iPid >= 0) {
+                    canDiff = true
+                    while (c.moveToNext()) {
+                        val pid = c.getString(iPid)
+                        if (pid.isNullOrEmpty()) continue
+                        published[pid] = OldProgram(
+                            c.getLong(iId),
+                            if (iTitle >= 0) c.getString(iTitle) else null,
+                            if (iImage >= 0) c.getString(iImage) else null
+                        )
+                    }
+                }
+            }
+        } catch (ex: Exception) {
+            canDiff = false
+        }
+        if (!canDiff) {
+            try {
+                resolver.delete(channelUri, null, null)
+            } catch (ex: Exception) {
+                // ignora
+            }
+        }
+
+        val inserts = ArrayList<ContentValues>()
+        val batch = ArrayList<ContentProviderOperation>()
+        val programsUri = TvContractCompat.PreviewPrograms.CONTENT_URI
 
         for (m in metas) {
             val type = when (m.type) {
@@ -210,7 +291,7 @@ object RefreshEngine {
                     else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
                 }
             }
-            val program = PreviewProgram.Builder()
+            val builder = PreviewProgram.Builder()
                 .setChannelId(channelId)
                 .setType(type)
                 .setTitle(m.name)
@@ -218,35 +299,50 @@ object RefreshEngine {
                 .setPosterArtAspectRatio(ratio)
                 .setIntent(programIntent(ctx, store, m))
                 .setInternalProviderId(m.id)
-                .build()
             index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
-            values.add(program.toContentValues())
-            sig.append(m.id).append('|').append(m.name).append('|').append(image).append('|').append(ratio).append(';')
-        }
+            if (m.description.isNotEmpty()) builder.setDescription(m.description.take(300))
 
-        // Se i titoli sono gli stessi dell'ultima volta non tocco la home: evita che il launcher la ricarichi ogni volta.
-        val sigStr = sig.toString().hashCode().toString() + ":" + sig.length
-        val sp = ctx.getSharedPreferences("sigs", Context.MODE_PRIVATE)
-        val sigKey = "ch$channelId"
-        if (sp.getString(sigKey, null) == sigStr && channelHasPrograms(ctx, channelId)) return
-
-        val programsUri = TvContractCompat.buildPreviewProgramsUriForChannel(channelId)
-        try {
-            val ops = ArrayList<ContentProviderOperation>()
-            ops.add(ContentProviderOperation.newDelete(programsUri).build())
-            for (cv in values) {
-                ops.add(
-                    ContentProviderOperation.newInsert(TvContractCompat.PreviewPrograms.CONTENT_URI)
-                        .withValues(cv)
-                        .build()
+            val values = builder.build().toContentValues()
+            val old = published.remove(m.id)
+            when {
+                old == null -> inserts.add(values)
+                old.title != m.name || old.image != image -> batch.add(
+                    ContentProviderOperation.newUpdate(
+                        ContentUris.withAppendedId(programsUri, old.rowId)
+                    ).withValues(values).build()
                 )
             }
-            resolver.applyBatch(TvContractCompat.AUTHORITY, ops)
-        } catch (e: Exception) {
-            resolver.delete(programsUri, null, null)
-            for (cv in values) resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, cv)
         }
-        sp.edit().putString(sigKey, sigStr).apply()
+
+        // Titoli spariti dal catalogo
+        for (o in published.values) {
+            batch.add(
+                ContentProviderOperation.newDelete(
+                    ContentUris.withAppendedId(programsUri, o.rowId)
+                ).build()
+            )
+        }
+
+        if (inserts.isNotEmpty()) {
+            try {
+                resolver.bulkInsert(channelUri, inserts.toTypedArray())
+            } catch (ex: Exception) {
+                for (v in inserts) {
+                    try {
+                        resolver.insert(channelUri, v)
+                    } catch (e: Exception) {
+                        // ignora la singola card
+                    }
+                }
+            }
+        }
+        if (batch.isNotEmpty()) {
+            try {
+                resolver.applyBatch(programsUri.authority ?: "android.media.tv", batch)
+            } catch (ex: Exception) {
+                // best effort: le card restano come prima
+            }
+        }
     }
 
     private fun launchIntent(ctx: Context, store: Store): Intent {

@@ -32,6 +32,26 @@ object WallpaperRenderer {
     private const val TEXT_X = 96f
     private const val TEXT_W = 760
 
+    // Buffer riusati: un 1920x1080 nuovo per ogni card a fuoco costava ~8 MB di allocazione
+    // e scatenava il GC proprio mentre Projectivy disegnava lo sfondo.
+    private val poolLock = Any()
+    private val freeBuffers = ArrayList<Bitmap>(2)
+
+    private fun obtain(): Bitmap = synchronized(poolLock) {
+        if (freeBuffers.isNotEmpty()) {
+            freeBuffers.removeAt(freeBuffers.size - 1)
+        } else {
+            Bitmap.createBitmap(W, H, Bitmap.Config.RGB_565)
+        }
+    }
+
+    /** Da chiamare dopo save(): rimette il buffer in circolo. */
+    fun release(bmp: Bitmap) {
+        synchronized(poolLock) {
+            if (freeBuffers.size < 2 && !bmp.isRecycled) freeBuffers.add(bmp)
+        }
+    }
+
     private fun withAlpha(color: Int, a: Int): Int = (a shl 24) or (color and 0x00FFFFFF)
 
     private fun mix(a: Int, b: Int, t: Float): Int {
@@ -100,7 +120,7 @@ object WallpaperRenderer {
     }
 
     fun neutral(): Bitmap {
-        val bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val bmp = obtain()
         val c = Canvas(bmp)
         c.drawColor(BASE)
         val p = Paint()
@@ -121,7 +141,7 @@ object WallpaperRenderer {
         backdrop: Bitmap?,
         poster: Bitmap?
     ): Bitmap {
-        val bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val bmp = obtain()
         val c = Canvas(bmp)
         c.drawColor(BASE)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -188,7 +208,7 @@ object WallpaperRenderer {
 
     /** App: logo (o banner) ingrandito in alto a destra, nome a sinistra. */
     fun composeApp(ctx: Context, pkg: String, label: String, dark: Int): Bitmap {
-        val bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val bmp = obtain()
         val c = Canvas(bmp)
         c.drawColor(BASE)
         val tint = if (dark != 0) mix(BASE, dark or 0xFF000000.toInt(), 0.6f) else mix(BASE, 0xFF4B3F8C.toInt(), 0.5f)

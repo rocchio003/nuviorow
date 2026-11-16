@@ -26,8 +26,17 @@ Da lì le righe si aggiornano da sole ogni 6 ore.
 
 1. Crea un repository e carica tutti i file di questo progetto mantenendo le cartelle.
 2. Vai nella scheda **Actions**: la build parte a ogni commit (o con "Run workflow").
-3. A build finita, l'APK è nella sezione **Releases** (release `latest`, file `NuvioRows.apk`) e anche negli artifact del workflow.
-4. Installalo sulla TV con Downloader (incollando l'URL dell'asset) oppure con `adb install NuvioRows.apk`.
+3. A build finita ogni build crea **una release sua**: `v1.0.<n>` (es. `v1.0.42`), con due file dentro:
+   - `NuvioRows-1.0.<n>.apk` — la build specifica, che resta scaricabile anche dopo;
+   - `NuvioRows.apk` — copia identica con nome fisso, per il link "ultima versione".
+   Lo stesso APK è anche negli artifact del workflow (nome `NuvioRows-1.0.<n>`).
+   Il numero `<n>` è il numero della run di GitHub Actions e diventa anche `versionCode` e `versionName` dell'app.
+4. Link utili:
+   - ultima versione: `https://github.com/rocchio003/nuviorow/releases/latest/download/NuvioRows.apk`
+   - build precisa: `https://github.com/rocchio003/nuviorow/releases/download/v1.0.42/NuvioRows-1.0.42.apk`
+5. Installalo sulla TV con Downloader (incollando l'URL dell'asset) oppure con `adb install NuvioRows.apk`.
+
+In locale `GITHUB_RUN_NUMBER` non esiste, quindi la build vale `1.0.1` con `versionCode` 1: se sulla TV hai già installato un APK preso da GitHub (versionCode più alto), installa con `adb install -r -d NuvioRows.apk`.
 
 ## Note
 
