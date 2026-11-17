@@ -245,12 +245,11 @@ object WallpaperRenderer {
         val cx = W * 0.70f
         val cy = H * 0.30f
         if (banner != null) {
-            // I banner delle app Android TV nascono a 320x180: portarli a 760 di larghezza era un
-            // ingrandimento di 2,4x, quindi sfocato per costruzione. Oltre 1,5x non si guadagna
-            // dettaglio, si perde solo nitidezza; i banner già grandi restano a 760 (ridotti).
-            val iw = banner.intrinsicWidth
-            val bw = if (iw > 0) Math.min(760, (iw * 1.5f).toInt()).coerceAtLeast(360) else 480
-            val bh = (bw * 9f / 16f).toInt()
+            // Misura grande, quella che l'utente preferisce: 760x428, quasi il doppio dell'icona.
+            // Il banner piccolo viene ingrandito con filtro bilineare: resta morbido, ma il
+            // colore ora è pieno (ARGB_8888 + PNG) quindi non si vedono più aloni sui bordi.
+            val bw = 760
+            val bh = 428
             val img = drawableToBitmap(banner, bw, bh)
             val dst = RectF(cx - bw / 2f, cy - bh / 2f, cx + bw / 2f, cy + bh / 2f)
             val clip = Path()

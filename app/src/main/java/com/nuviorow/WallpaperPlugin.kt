@@ -92,9 +92,9 @@ object WallpaperEngine {
     const val AUTHORITY = "com.nuviorows.wallpapers"
     const val PROVIDER_UUID = "88a263c3-01fa-47bf-ab07-f4e3566d9157"
     private const val PROJECTIVY_PKG = "com.spocky.projengmenu"
-    // v3: card ridisegnate in ARGB_8888 e card delle app salvate in PNG. Il numero fa parte
-    // della chiave, quindi senza il cambio in cache resterebbero i file vecchi sgranati.
-    private const val RENDER_VERSION = "v3"
+    // v4: arte di nuovo a misura grande e attesa più lunga al primo giro. Il numero fa parte
+    // della chiave, quindi senza il cambio in cache resterebbero i file vecchi.
+    private const val RENDER_VERSION = "v4"
     // ~1 MB a PNG e ~250 KB a JPEG: 60 file stanno sotto i 60 MB, su una TV con 800 MB liberi.
     private const val MAX_FILES = 60
 
@@ -277,7 +277,10 @@ object WallpaperEngine {
 
     private fun appWallpaper(ctx: Context, pkg: String, label: String, dark: Int): List<Wallpaper> {
         val key = "a_" + hash("$RENDER_VERSION|$pkg|$label|$dark")
-        return serve(ctx, key, label, 60L, 320L) { out ->
+        // 900 ms e non 320: l'encoding PNG di un 1920x1080 richiede qualche centinaio di ms sul
+        // SoC della TV, quindi con 320 ms la prima richiesta andava sempre in timeout e serviva
+        // un secondo giro (era questo a far sembrare più lenta la comparsa delle card).
+        return serve(ctx, key, label, 60L, 900L) { out ->
             val bmp = WallpaperRenderer.composeApp(ctx, pkg, label, dark)
             val ok = try {
                 WallpaperRenderer.save(bmp, out)
