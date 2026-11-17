@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -167,7 +168,64 @@ class GuideView(
     private val pBmp = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val rect = RectF()
     private val box = RectF()
-    private val shade = Path()
+
+    // Gradienti creati una volta in spazio unitario: il disegno li sposta con la matrice.
+    // Prima se ne allocava uno per ogni cella a ogni frame, ed era quello a far scattare lo scroll.
+    private val mx = Matrix()
+    private val shSel = LinearGradient(
+        0f, 0f, 1f, 1f,
+        intArrayOf(0xFFCD94FF.toInt(), 0xFFB45CFF.toInt(), 0xFFA63CFF.toInt(), 0xFF8D1FD6.toInt()),
+        floatArrayOf(0f, 0.34f, 0.64f, 1f),
+        Shader.TileMode.CLAMP
+    )
+    private val shNow = LinearGradient(
+        0f, 0f, 0f, 1f,
+        intArrayOf(0x4DA88CFF, 0x298050E6),
+        null,
+        Shader.TileMode.CLAMP
+    )
+    private val shSoft = LinearGradient(
+        0f, 0f, 1f, 1f,
+        intArrayOf(0x80A63CFF.toInt(), 0x248050E6),
+        null,
+        Shader.TileMode.CLAMP
+    )
+    private val shGlass = LinearGradient(
+        0f, 0f, 0f, 1f,
+        intArrayOf(0x33CAD8F6, 0x22929EBE),
+        null,
+        Shader.TileMode.CLAMP
+    )
+    private val shReflOn = LinearGradient(
+        0f, 0f, 0.62f, 1f,
+        intArrayOf(0x00FFFFFF, 0x47FFFFFF, 0x00FFFFFF),
+        floatArrayOf(0f, 0.32f, 0.58f),
+        Shader.TileMode.CLAMP
+    )
+    private val shReflOff = LinearGradient(
+        0f, 0f, 0.62f, 1f,
+        intArrayOf(0x00FFFFFF, 0x2EFFFFFF, 0x00FFFFFF),
+        floatArrayOf(0f, 0.32f, 0.58f),
+        Shader.TileMode.CLAMP
+    )
+    private val shTile = LinearGradient(
+        0f, 0f, 1f, 1f,
+        intArrayOf(0x38DCE8FF, 0x1496A5C8),
+        null,
+        Shader.TileMode.CLAMP
+    )
+    private val shBar = LinearGradient(
+        0f, 0f, 0f, 1f,
+        intArrayOf(0xFFD9B8FF.toInt(), cAccent),
+        null,
+        Shader.TileMode.CLAMP
+    )
+    private val shPanel = LinearGradient(
+        0f, 0f, 0f, 1f,
+        intArrayOf(0xFF101128.toInt(), 0xFF090A1A.toInt()),
+        null,
+        Shader.TileMode.CLAMP
+    )
 
     private val tfBold = Typeface.DEFAULT_BOLD
     private val tfNormal = Typeface.DEFAULT
@@ -404,50 +462,20 @@ class GuideView(
         }
 
         pFill.shader = when (kind) {
-            "sel" -> LinearGradient(
-                l, t, r, b,
-                intArrayOf(0xFFCD94FF.toInt(), 0xFFB45CFF.toInt(), 0xFFA63CFF.toInt(), 0xFF8D1FD6.toInt()),
-                floatArrayOf(0f, 0.34f, 0.64f, 1f),
-                Shader.TileMode.CLAMP
-            )
-            "now" -> LinearGradient(
-                l, t, l, b,
-                intArrayOf(0x4DA88CFF, 0x298050E6),
-                null,
-                Shader.TileMode.CLAMP
-            )
-            "soft" -> LinearGradient(
-                l, t, r, b,
-                intArrayOf(0x80A63CFF.toInt(), 0x248050E6),
-                null,
-                Shader.TileMode.CLAMP
-            )
-            else -> LinearGradient(
-                l, t, l, b,
-                intArrayOf(0x33CAD8F6, 0x22929EBE),
-                null,
-                Shader.TileMode.CLAMP
-            )
+            "sel" -> shSel
+            "now" -> shNow
+            "soft" -> shSoft
+            else -> shGlass
         }
+        mx.setScale(r - l, b - t)
+        mx.postTranslate(l, t)
+        pFill.shader.setLocalMatrix(mx)
         canvas.drawRoundRect(box, radius, radius, pFill)
 
-        // riflesso diagonale del vetro
-        shade.reset()
-        shade.addRoundRect(box, radius, radius, Path.Direction.CW)
-        canvas.save()
-        canvas.clipPath(shade)
-        pFill.shader = LinearGradient(
-            l, t, l + (r - l) * 0.62f, b,
-            intArrayOf(
-                0x00FFFFFF,
-                if (kind == "sel") 0x47FFFFFF else 0x2EFFFFFF,
-                0x00FFFFFF
-            ),
-            floatArrayOf(0f, 0.32f, 0.58f),
-            Shader.TileMode.CLAMP
-        )
-        canvas.drawRect(box, pFill)
-        canvas.restore()
+        // riflesso diagonale del vetro: stesso rettangolo arrotondato, senza clipPath per cella
+        pFill.shader = if (kind == "sel") shReflOn else shReflOff
+        pFill.shader.setLocalMatrix(mx)
+        canvas.drawRoundRect(box, radius, radius, pFill)
 
         pStroke.shader = null
         pStroke.strokeWidth = dp(1f)
@@ -474,12 +502,10 @@ class GuideView(
             }
         }
         box.set(l, t, r, b)
-        pFill.shader = LinearGradient(
-            l, t, r, b,
-            intArrayOf(0x38DCE8FF, 0x1496A5C8),
-            null,
-            Shader.TileMode.CLAMP
-        )
+        pFill.shader = shTile
+        mx.setScale(r - l, b - t)
+        mx.postTranslate(l, t)
+        pFill.shader.setLocalMatrix(mx)
         canvas.drawRoundRect(box, radius, radius, pFill)
         pStroke.shader = null
         pStroke.strokeWidth = dp(1f)
@@ -579,12 +605,10 @@ class GuideView(
                     rect.set(dp(6f) - g, top + dp(10f) - g, dp(9f) + g, bottom - dp(10f) + g)
                     canvas.drawRoundRect(rect, dp(2f) + g, dp(2f) + g, pFill)
                 }
-                pFill.shader = LinearGradient(
-                    dp(6f), top, dp(9f), bottom,
-                    intArrayOf(0xFFD9B8FF.toInt(), cAccent),
-                    null,
-                    Shader.TileMode.CLAMP
-                )
+                pFill.shader = shBar
+                mx.setScale(dp(3f), bottom - top - dp(20f))
+                mx.postTranslate(dp(6f), top + dp(10f))
+                pFill.shader.setLocalMatrix(mx)
                 rect.set(dp(6f), top + dp(10f), dp(9f), bottom - dp(10f))
                 canvas.drawRoundRect(rect, dp(2f), dp(2f), pFill)
             }
@@ -665,13 +689,16 @@ class GuideView(
     }
 
     private fun drawGroups(canvas: Canvas, rowsBottom: Float) {
-        val panelW = dp(300f)
-        pFill.shader = LinearGradient(
-            0f, headerH, 0f, rowsBottom,
-            intArrayOf(0xF2101128.toInt(), 0xF7090A1A.toInt()),
-            null,
-            Shader.TileMode.CLAMP
-        )
+        val panelW = dp(320f)
+        // velo sulla timeline: l'elenco si legge come un pannello sopra la guida
+        pFill.shader = null
+        pFill.color = 0x8C05060F.toInt()
+        canvas.drawRect(chanW, headerH, width.toFloat(), rowsBottom, pFill)
+        // pannello pieno (non traslucido): prima i nomi dei canali trasparivano sotto l'elenco
+        pFill.shader = shPanel
+        mx.setScale(panelW, rowsBottom - headerH)
+        mx.postTranslate(0f, headerH)
+        pFill.shader.setLocalMatrix(mx)
         canvas.drawRect(0f, headerH, panelW, rowsBottom, pFill)
 
         pLine.shader = null

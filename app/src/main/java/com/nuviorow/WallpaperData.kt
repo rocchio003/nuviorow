@@ -77,6 +77,10 @@ object CardIndex {
     @Volatile
     private var cacheStamp = -1L
 
+    // Indici pronti: cercare la card non deve scandire (e normalizzare) tutta la lista a ogni focus.
+    private var byIcon: Map<String, Entry> = emptyMap()
+    private var byName: Map<String, Entry> = emptyMap()
+
     fun norm(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
 
     fun save(ctx: Context, list: List<Entry>) {
@@ -122,19 +126,26 @@ object CardIndex {
         }
         cache = out
         cacheStamp = stamp
+        val icons = HashMap<String, Entry>(out.size * 2)
+        val names = HashMap<String, Entry>(out.size * 2)
+        for (e in out) {
+            if (e.icon.isNotEmpty()) icons.putIfAbsent(e.icon, e)
+            val n = norm(e.name)
+            if (n.isNotEmpty()) names.putIfAbsent(n, e)
+        }
+        byIcon = icons
+        byName = names
         return out
     }
 
     fun find(ctx: Context, icon: String?, title: String): Entry? {
-        val list = entries(ctx)
-        if (list.isEmpty()) return null
+        if (entries(ctx).isEmpty()) return null
         if (!icon.isNullOrEmpty()) {
-            val byIcon = list.firstOrNull { it.icon == icon }
-            if (byIcon != null) return byIcon
+            byIcon[icon]?.let { return it }
         }
         val n = norm(title)
         if (n.isEmpty()) return null
-        return list.firstOrNull { norm(it.name) == n }
+        return byName[n]
     }
 
     // Voci vicine nella stessa riga: servono a scaldare le immagini della card successiva.

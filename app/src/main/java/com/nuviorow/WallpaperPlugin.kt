@@ -91,10 +91,6 @@ object WallpaperEngine {
     private const val RENDER_VERSION = "v2"
     private const val MAX_FILES = 150
 
-    // Aspetto 250 ms prima di disegnare: se l'utente scorre veloce non lavoro per le card già superate.
-    private const val DEBOUNCE_MS = 250L
-    private const val WAIT_MS = 150L
-
     private const val OK = 1
     private const val FAIL = 0
     private const val SKIPPED = -1
@@ -110,7 +106,6 @@ object WallpaperEngine {
             r.run()
         }
     })
-    private val prefetchPool = Executors.newSingleThreadExecutor()
     private val inflight = ConcurrentHashMap<String, FutureTask<Int>>()
     private val failed: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -162,21 +157,6 @@ object WallpaperEngine {
         return if (f.exists()) listOf(wallpaper(f, "Nuvio Rows")) else emptyList()
     }
 
-    // Scalda la cache immagini delle card vicine: quando l'utente si sposta, lo sfondo è già pronto.
-    private fun prefetchAround(ctx: Context, entry: CardIndex.Entry?) {
-        if (entry == null) return
-        prefetchPool.execute {
-            for (e in CardIndex.around(ctx, entry, 1)) {
-                val url = when {
-                    e.background.startsWith("http") -> e.background
-                    e.poster.startsWith("http") -> e.poster
-                    else -> null
-                }
-                if (url != null) Imgs.load(url, 960)
-            }
-        }
-    }
-
     private fun prune(ctx: Context) {
         val files = dir(ctx).listFiles() ?: return
         if (files.size <= MAX_FILES) return
@@ -201,10 +181,21 @@ object WallpaperEngine {
 
     /**
      * Se il file c'è già lo restituisce subito. Altrimenti lo fa disegnare in background
-     * (dopo una breve attesa) e, se in 150 ms non è pronto, lascia lo sfondo attuale:
+     * dopo un breve debounce e, se non è pronto entro [waitMs], lascia lo sfondo attuale:
      * a disegno finito avvisa Projectivy, che richiede lo sfondo e trova il file pronto.
+     *
+     * Le card delle app si disegnano in locale in pochi ms, quindi lì si aspetta di più e
+     * l'immagine arriva al primo colpo; per i film il disegno scarica da TMDB, quindi si
+     * aspetta poco e si lascia fare al secondo giro.
      */
-    private fun serve(ctx: Context, key: String, title: String, render: (File) -> Int): List<Wallpaper> {
+    private fun serve(
+        ctx: Context,
+        key: String,
+        title: String,
+        debounceMs: Long,
+        waitMs: Long,
+        render: (File) -> Int
+    ): List<Wallpaper> {
         latest = key
         val f = File(dir(ctx), "$key.jpg")
         if (f.exists()) {
@@ -215,7 +206,7 @@ object WallpaperEngine {
 
         val task = FutureTask<Int>(Callable {
             try {
-                Thread.sleep(DEBOUNCE_MS)
+                Thread.sleep(debounceMs)
             } catch (e: InterruptedException) {
                 // ignora
             }
@@ -241,7 +232,7 @@ object WallpaperEngine {
         }
 
         val r = try {
-            fut.get(WAIT_MS, TimeUnit.MILLISECONDS)
+            fut.get(waitMs, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
             return emptyList()
         } catch (e: Exception) {
@@ -275,7 +266,7 @@ object WallpaperEngine {
 
     private fun appWallpaper(ctx: Context, pkg: String, label: String, dark: Int): List<Wallpaper> {
         val key = "a_" + hash("$RENDER_VERSION|$pkg|$label|$dark")
-        return serve(ctx, key, label) { out ->
+        return serve(ctx, key, label, 60L, 320L) { out ->
             val bmp = WallpaperRenderer.composeApp(ctx, pkg, label, dark)
             val ok = try {
                 WallpaperRenderer.save(bmp, out)
@@ -304,14 +295,13 @@ object WallpaperEngine {
 
         val store = Store(ctx)
         val key = "p_" + hash("$RENDER_VERSION|$title|${ev.iconUri}|${store.tmdbKey.isNotEmpty()}")
-        return serve(ctx, key, title) { out -> renderProgram(ctx, ev, key, out) }
+        return serve(ctx, key, title, 200L, 150L) { out -> renderProgram(ctx, ev, key, out) }
     }
 
     private fun renderProgram(ctx: Context, ev: Event.ProgramCardFocused, key: String, out: File): Int {
         val store = Store(ctx)
         val rawTitle = ev.title?.trim().orEmpty()
         val entry = CardIndex.find(ctx, ev.iconUri, rawTitle)
-        prefetchAround(ctx, entry)
 
         val kindHint: String? = when {
             entry != null && entry.type == "series" -> "tv"

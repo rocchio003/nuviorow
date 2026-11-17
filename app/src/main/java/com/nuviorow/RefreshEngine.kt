@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
+import android.os.Process
 import android.provider.BaseColumns
 import androidx.tvprovider.media.tv.Channel
 import androidx.tvprovider.media.tv.ChannelLogoUtils
@@ -91,6 +92,8 @@ object RefreshEngine {
                 val tasks = jobs.mapIndexed { i, job ->
                     Callable<String?> {
                         try {
+                            // a priorità bassa: il refresh non deve rubare CPU alla home
+                            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                             val metas = Stremio.fetchCatalog(
                                 job.addon.baseUrl, job.catalog.type, job.catalog.id, store.maxItems
                             )
@@ -149,33 +152,39 @@ object RefreshEngine {
             channelIds[GUIDE_KEY] = channelId
             newIds.add(channelId)
         }
-        // se la card della guida c'è già non la ricreo: evita di far ricaricare la home
-        if (channelHasPrograms(ctx, channelId)) return
         val resolver = ctx.contentResolver
+        val poster = "android.resource://" + ctx.packageName + "/drawable/guide_card_v2"
+        // se l'immagine pubblicata è già quella giusta non tocco la home;
+        // se è cambiata la rimpiazzo, altrimenti il launcher continua a mostrare quella vecchia in cache
+        val current = try {
+            resolver.query(
+                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
+                arrayOf(BaseColumns._ID, "poster_art_uri"),
+                null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getString(1) else null }
+        } catch (e: Exception) {
+            null
+        }
+        if (current == poster) return
+        if (current != null) {
+            try {
+                resolver.delete(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), null, null)
+            } catch (e: Exception) {
+                // se non riesco a cancellare, l'insert qui sotto rimedia al prossimo giro
+            }
+        }
         val intent = Intent(ctx, GuideActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val program = PreviewProgram.Builder()
             .setChannelId(channelId)
             .setType(TvContractCompat.PreviewPrograms.TYPE_CLIP)
             .setTitle("Guida TV")
             .setDescription("Apri la guida dei canali")
-            .setPosterArtUri(Uri.parse("android.resource://" + ctx.packageName + "/drawable/guide_card"))
+            .setPosterArtUri(Uri.parse(poster))
             .setPosterArtAspectRatio(TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9)
             .setIntent(intent)
             .setInternalProviderId("guide")
             .build()
         resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, program.toContentValues())
-    }
-
-    private fun channelHasPrograms(ctx: Context, channelId: Long): Boolean {
-        return try {
-            ctx.contentResolver.query(
-                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
-                arrayOf(BaseColumns._ID),
-                null, null, null
-            )?.use { it.count > 0 } ?: false
-        } catch (e: Exception) {
-            false
-        }
     }
 
     private fun typeLabel(type: String): String = when (type) {
