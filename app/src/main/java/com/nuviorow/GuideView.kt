@@ -220,12 +220,6 @@ class GuideView(
         null,
         Shader.TileMode.CLAMP
     )
-    private val shPanel = LinearGradient(
-        0f, 0f, 0f, 1f,
-        intArrayOf(0xFF101128.toInt(), 0xFF090A1A.toInt()),
-        null,
-        Shader.TileMode.CLAMP
-    )
 
     private val tfBold = Typeface.DEFAULT_BOLD
     private val tfNormal = Typeface.DEFAULT
@@ -282,7 +276,7 @@ class GuideView(
         if (groups.size <= 1) return
         groupMode = true
         groupCursor = groupIndex
-        val vr = visibleRows()
+        val vr = groupRows()
         groupTop = (groupCursor - vr / 2).coerceAtLeast(0)
     }
 
@@ -301,9 +295,9 @@ class GuideView(
             KeyEvent.KEYCODE_DPAD_DOWN -> groupCursor = (groupCursor + 1).coerceAtMost(groups.size - 1)
             KeyEvent.KEYCODE_DPAD_UP -> groupCursor = (groupCursor - 1).coerceAtLeast(0)
             KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN ->
-                groupCursor = (groupCursor + visibleRows()).coerceAtMost(groups.size - 1)
+                groupCursor = (groupCursor + groupRows()).coerceAtMost(groups.size - 1)
             KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP ->
-                groupCursor = (groupCursor - visibleRows()).coerceAtLeast(0)
+                groupCursor = (groupCursor - groupRows()).coerceAtLeast(0)
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 applyGroup(groupCursor)
@@ -314,7 +308,7 @@ class GuideView(
             }
             else -> return false
         }
-        val vr = visibleRows()
+        val vr = groupRows()
         if (groupCursor < groupTop) groupTop = groupCursor
         if (groupCursor >= groupTop + vr) groupTop = groupCursor - vr + 1
         invalidate()
@@ -326,6 +320,10 @@ class GuideView(
 
     private fun visibleRows(): Int =
         ((height - headerH - detailH) / rowH).toInt().coerceAtLeast(1)
+
+    // L'elenco dei gruppi ha righe proprie (52 dp dentro la scheda), non quelle della griglia.
+    private fun groupRows(): Int =
+        ((height - detailH - headerH - dp(16f)) / dp(52f)).toInt().coerceAtLeast(1)
 
     // I programmi sono ordinati per inizio: ricerca binaria invece di scandire la lista.
     private fun programAt(row: Int, t: Long): GProgram? {
@@ -531,10 +529,15 @@ class GuideView(
         val vr = visibleRows()
         val now = System.currentTimeMillis()
 
-        drawNowLine(canvas, tlLeft, rowsBottom, viewStart, pxPerMs, now)
-        drawHeader(canvas, pxPerMs, viewStart, viewEnd)
-        drawRows(canvas, tlLeft, pxPerMs, viewStart, viewEnd, vr, now)
-        if (groupMode) drawGroups(canvas, rowsBottom)
+        if (groupMode) {
+            // Modalità gruppi: la griglia non viene disegnata affatto, così non può trasparire
+            // sotto l'elenco (prima canali e capsule restavano visibili attraverso il pannello).
+            drawGroups(canvas, w, rowsBottom)
+        } else {
+            drawNowLine(canvas, tlLeft, rowsBottom, viewStart, pxPerMs, now)
+            drawHeader(canvas, pxPerMs, viewStart, viewEnd)
+            drawRows(canvas, tlLeft, pxPerMs, viewStart, viewEnd, vr, now)
+        }
         drawDetail(canvas, w, h, now)
     }
 
@@ -688,52 +691,95 @@ class GuideView(
         }
     }
 
-    private fun drawGroups(canvas: Canvas, rowsBottom: Float) {
-        val panelW = dp(320f)
-        // velo sulla timeline: l'elenco si legge come un pannello sopra la guida
+    /**
+     * Modalità gruppi: è una schermata a sé. Riempio tutta l'area con un colore unito e disegno
+     * l'elenco in una scheda piena, senza nulla sotto e senza vetro traslucido.
+     */
+    private fun drawGroups(canvas: Canvas, w: Float, rowsBottom: Float) {
         pFill.shader = null
-        pFill.color = 0x8C05060F.toInt()
-        canvas.drawRect(chanW, headerH, width.toFloat(), rowsBottom, pFill)
-        // pannello pieno (non traslucido): prima i nomi dei canali trasparivano sotto l'elenco
-        pFill.shader = shPanel
-        mx.setScale(panelW, rowsBottom - headerH)
-        mx.postTranslate(0f, headerH)
-        pFill.shader.setLocalMatrix(mx)
-        canvas.drawRect(0f, headerH, panelW, rowsBottom, pFill)
+        pFill.color = 0xFF07080F.toInt()
+        canvas.drawRect(0f, 0f, w, rowsBottom, pFill)
 
-        pLine.shader = null
-        pLine.color = 0x24FFFFFF
-        pLine.strokeWidth = dp(1f)
-        canvas.drawLine(panelW, headerH, panelW, rowsBottom, pLine)
+        pText.typeface = tfMedium
+        pText.textSize = dp(12f)
+        pText.letterSpacing = 0.16f
+        pText.color = cTextDim
+        pText.textAlign = Paint.Align.LEFT
+        canvas.drawText("GRUPPI", dp(26f), baseline(dp(30f), pText), pText)
+        pText.letterSpacing = 0f
 
-        val vr = visibleRows()
+        val panelL = dp(18f)
+        val panelR = minOf(w - dp(18f), chanW + dp(190f))
+        val panelTop = headerH
+        val panelBottom = rowsBottom - dp(6f)
+
+        pFill.shader = null
+        pFill.color = 0xFF111227.toInt()
+        box.set(panelL, panelTop, panelR, panelBottom)
+        canvas.drawRoundRect(box, dp(14f), dp(14f), pFill)
+        pStroke.shader = null
+        pStroke.color = 0x3AFFFFFF
+        pStroke.strokeWidth = dp(1f)
+        canvas.drawRoundRect(box, dp(14f), dp(14f), pStroke)
+
+        val rowH2 = dp(52f)
+        val innerL = panelL + dp(8f)
+        val innerR = panelR - dp(8f)
+        val top0 = panelTop + dp(10f)
+        val vr = groupRows()
+
+        // indicatore di posizione
+        pText.typeface = tfMedium
+        pText.textSize = dp(11f)
+        pText.color = cTextFaint
+        pText.textAlign = Paint.Align.RIGHT
+        canvas.drawText(
+            "${groupCursor + 1}/${groups.size}",
+            panelR - dp(18f),
+            baseline(dp(30f), pText),
+            pText
+        )
+        pText.textAlign = Paint.Align.LEFT
+
         for (r in 0 until vr) {
             val gi = groupTop + r
             if (gi >= groups.size) break
-            val top = headerH + r * rowH
-            val bottom = top + rowH
+            val top = top0 + r * rowH2
+            val bottom = top + rowH2
+            if (bottom > panelBottom - dp(4f)) break
+
             if (gi == groupCursor) {
-                capsule(canvas, dp(8f), top + dp(6f), panelW - dp(12f), bottom - dp(6f), "soft", false)
+                pFill.shader = shSel
+                mx.setScale(innerR - innerL, bottom - top - dp(6f))
+                mx.postTranslate(innerL, top + dp(3f))
+                pFill.shader.setLocalMatrix(mx)
+                rect.set(innerL, top + dp(3f), innerR, bottom - dp(3f))
+                canvas.drawRoundRect(rect, dp(10f), dp(10f), pFill)
             }
 
             pText.typeface = if (gi == groupCursor) tfBold else tfNormal
-            pText.textSize = dp(13.5f)
-            pText.color = cText
+            pText.textSize = dp(15f)
+            pText.color = if (gi == groupCursor) 0xFFFFFFFF.toInt() else cText
             pText.textAlign = Paint.Align.LEFT
             val mark = if (gi == groupIndex) "\u25CF " else ""
             canvas.save()
-            canvas.clipRect(dp(22f), top, panelW - dp(64f), bottom)
-            canvas.drawText(mark + groups[gi], dp(22f), baseline(top + rowH / 2f, pText), pText)
+            canvas.clipRect(innerL + dp(14f), top, innerR - dp(72f), bottom)
+            canvas.drawText(
+                mark + groups[gi],
+                innerL + dp(14f),
+                baseline(top + rowH2 / 2f, pText),
+                pText
+            )
             canvas.restore()
 
             pText.textAlign = Paint.Align.RIGHT
             pText.typeface = tfNormal
-            pText.textSize = dp(11.5f)
-            pText.color = cTextFaint
+            pText.textSize = dp(12f)
+            pText.color = if (gi == groupCursor) 0xFFEADBFF.toInt() else cTextFaint
             canvas.drawText(
                 groupCounts[gi].toString(),
-                panelW - dp(24f),
-                baseline(top + rowH / 2f, pText),
+                innerR - dp(16f),
+                baseline(top + rowH2 / 2f, pText),
                 pText
             )
             pText.textAlign = Paint.Align.LEFT
