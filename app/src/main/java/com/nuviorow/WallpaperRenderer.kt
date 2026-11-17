@@ -37,11 +37,13 @@ object WallpaperRenderer {
     private val poolLock = Any()
     private val freeBuffers = ArrayList<Bitmap>(2)
 
+    // ARGB_8888 e non RGB_565: in 565 il blu ha 32 livelli e un gradient viola largo 1920 px
+    // mostrava bande larghe decine di pixel, oltre a bordi scalettati sui loghi.
     private fun obtain(): Bitmap = synchronized(poolLock) {
         if (freeBuffers.isNotEmpty()) {
             freeBuffers.removeAt(freeBuffers.size - 1)
         } else {
-            Bitmap.createBitmap(W, H, Bitmap.Config.RGB_565)
+            Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
         }
     }
 
@@ -108,10 +110,18 @@ object WallpaperRenderer {
         return p
     }
 
+    /**
+     * PNG per le card delle app (arte piatta: logo su tinta unita e gradient): il JPEG lì lascia
+     * aloni sui bordi netti e blocchi sul gradient, e su Android il sottocampionamento del colore
+     * resta 4:2:0 a qualunque qualità si passi a Bitmap.compress. JPEG 92 per film e serie: sono
+     * foto, dove la differenza non si vede e il file pesa un quarto.
+     */
     fun save(bmp: Bitmap, out: File): Boolean {
         return try {
             val tmp = File(out.parentFile, out.name + ".tmp")
-            FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+            val png = out.name.endsWith(".png", ignoreCase = true)
+            val fmt = if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+            FileOutputStream(tmp).use { bmp.compress(fmt, if (png) 100 else 92, it) }
             if (out.exists()) out.delete()
             tmp.renameTo(out)
         } catch (e: Exception) {
@@ -235,8 +245,12 @@ object WallpaperRenderer {
         val cx = W * 0.70f
         val cy = H * 0.30f
         if (banner != null) {
-            val bw = 760
-            val bh = 428
+            // I banner delle app Android TV nascono a 320x180: portarli a 760 di larghezza era un
+            // ingrandimento di 2,4x, quindi sfocato per costruzione. Oltre 1,5x non si guadagna
+            // dettaglio, si perde solo nitidezza; i banner già grandi restano a 760 (ridotti).
+            val iw = banner.intrinsicWidth
+            val bw = if (iw > 0) Math.min(760, (iw * 1.5f).toInt()).coerceAtLeast(360) else 480
+            val bh = (bw * 9f / 16f).toInt()
             val img = drawableToBitmap(banner, bw, bh)
             val dst = RectF(cx - bw / 2f, cy - bh / 2f, cx + bw / 2f, cy + bh / 2f)
             val clip = Path()

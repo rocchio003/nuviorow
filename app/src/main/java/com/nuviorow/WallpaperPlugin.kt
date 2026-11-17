@@ -47,7 +47,7 @@ class NuvioWallpaperService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 }
 
-/** Serve a Projectivy i file JPEG generati (content://com.nuviorows.wallpapers/nome.jpg). */
+/** Serve a Projectivy i file generati (content://com.nuviorows.wallpapers/nome.png o nome.jpg). */
 class WallpaperFileProvider : ContentProvider() {
 
     override fun onCreate(): Boolean = true
@@ -60,7 +60,11 @@ class WallpaperFileProvider : ContentProvider() {
         sortOrder: String?
     ): Cursor? = null
 
-    override fun getType(uri: Uri): String = "image/jpeg"
+    override fun getType(uri: Uri): String {
+        // Le card delle app sono PNG (arte piatta), film e serie restano JPEG.
+        val name = uri.lastPathSegment.orEmpty()
+        return if (name.endsWith(".png", ignoreCase = true)) "image/png" else "image/jpeg"
+    }
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
 
@@ -88,8 +92,11 @@ object WallpaperEngine {
     const val AUTHORITY = "com.nuviorows.wallpapers"
     const val PROVIDER_UUID = "88a263c3-01fa-47bf-ab07-f4e3566d9157"
     private const val PROJECTIVY_PKG = "com.spocky.projengmenu"
-    private const val RENDER_VERSION = "v2"
-    private const val MAX_FILES = 150
+    // v3: card ridisegnate in ARGB_8888 e card delle app salvate in PNG. Il numero fa parte
+    // della chiave, quindi senza il cambio in cache resterebbero i file vecchi sgranati.
+    private const val RENDER_VERSION = "v3"
+    // ~1 MB a PNG e ~250 KB a JPEG: 60 file stanno sotto i 60 MB, su una TV con 800 MB liberi.
+    private const val MAX_FILES = 60
 
     private const val OK = 1
     private const val FAIL = 0
@@ -133,6 +140,10 @@ object WallpaperEngine {
     private fun hash(s: String): String =
         MessageDigest.getInstance("MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
+    // Le card delle app (chiave "a_") sono arte piatta: in PNG non perdono nulla.
+    // Film e serie sono foto: lì il JPEG 92 è indistinguibile e pesa un quarto.
+    private fun extFor(key: String): String = if (key.startsWith("a_")) "png" else "jpg"
+
     private fun wallpaper(f: File, title: String): Wallpaper {
         val uri = Uri.parse("content://$AUTHORITY/${f.name}")
         return Wallpaper(
@@ -145,7 +156,7 @@ object WallpaperEngine {
     }
 
     private fun neutral(ctx: Context): List<Wallpaper> {
-        val f = File(dir(ctx), "neutral_$RENDER_VERSION.jpg")
+        val f = File(dir(ctx), "neutral_$RENDER_VERSION.png")
         if (!f.exists()) {
             val bmp = WallpaperRenderer.neutral()
             try {
@@ -197,7 +208,7 @@ object WallpaperEngine {
         render: (File) -> Int
     ): List<Wallpaper> {
         latest = key
-        val f = File(dir(ctx), "$key.jpg")
+        val f = File(dir(ctx), "$key." + extFor(key))
         if (f.exists()) {
             f.setLastModified(System.currentTimeMillis())
             return listOf(wallpaper(f, title))
