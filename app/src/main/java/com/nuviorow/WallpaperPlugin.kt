@@ -92,9 +92,9 @@ object WallpaperEngine {
     const val AUTHORITY = "com.nuviorows.wallpapers"
     const val PROVIDER_UUID = "88a263c3-01fa-47bf-ab07-f4e3566d9157"
     private const val PROJECTIVY_PKG = "com.spocky.projengmenu"
-    // v4: arte di nuovo a misura grande e attesa più lunga al primo giro. Il numero fa parte
-    // della chiave, quindi senza il cambio in cache resterebbero i file vecchi.
-    private const val RENDER_VERSION = "v4"
+    // v5: angoli arrotondati antialiasati e gradient più vivo. Il numero fa parte della chiave,
+    // quindi senza il cambio in cache resterebbero i file vecchi con i bordi a scalini.
+    private const val RENDER_VERSION = "v5"
     // ~1 MB a PNG e ~250 KB a JPEG: 60 file stanno sotto i 60 MB, su una TV con 800 MB liberi.
     private const val MAX_FILES = 60
 

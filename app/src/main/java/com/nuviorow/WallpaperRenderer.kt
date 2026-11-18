@@ -2,11 +2,13 @@ package com.nuviorows
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -28,7 +30,7 @@ object WallpaperRenderer {
     const val W = 1920
     const val H = 1080
 
-    private val BASE = 0xFF0E0D14.toInt()
+    private val BASE = 0xFF11101C.toInt()
     private const val TEXT_X = 96f
     private const val TEXT_W = 760
 
@@ -61,6 +63,23 @@ object WallpaperRenderer {
         val g = (Color.green(a) * (1 - t) + Color.green(b) * t).toInt()
         val bl = (Color.blue(a) * (1 - t) + Color.blue(b) * t).toInt()
         return Color.rgb(r, g, bl)
+    }
+
+    /**
+     * Bitmap dentro un riquadro con angoli arrotondati. Con Canvas.clipPath i bordi curvi
+     * venivano a scalini, perché il ritaglio di Canvas non è antialiasato: qui invece l'arco
+     * lo disegna drawRoundRect, che è antialiasato, e la bitmap la campiona il BitmapShader
+     * con la stessa scala che avrebbe avuto il drawBitmap.
+     */
+    private fun drawRounded(c: Canvas, bmp: Bitmap, dst: RectF, radius: Float, paint: Paint) {
+        val shader = BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        val m = Matrix()
+        m.setScale(dst.width() / bmp.width, dst.height() / bmp.height)
+        m.postTranslate(dst.left, dst.top)
+        shader.setLocalMatrix(m)
+        val p = Paint(paint)
+        p.shader = shader
+        c.drawRoundRect(dst, radius, radius, p)
     }
 
     private fun drawCover(c: Canvas, bmp: Bitmap, dst: RectF, paint: Paint) {
@@ -169,12 +188,7 @@ object WallpaperRenderer {
             val pw = ph * poster.width / poster.height
             val right = W - 150f
             val dst = RectF(right - pw, 60f, right, 60f + ph)
-            val clip = Path()
-            clip.addRoundRect(dst, 18f, 18f, Path.Direction.CW)
-            c.save()
-            c.clipPath(clip)
-            c.drawBitmap(poster, null, dst, paint)
-            c.restore()
+            drawRounded(c, poster, dst, 22f, paint)
         }
         drawFades(c, BASE)
 
@@ -221,10 +235,29 @@ object WallpaperRenderer {
         val bmp = obtain()
         val c = Canvas(bmp)
         c.drawColor(BASE)
-        val tint = if (dark != 0) mix(BASE, dark or 0xFF000000.toInt(), 0.6f) else mix(BASE, 0xFF4B3F8C.toInt(), 0.5f)
+        // Gradient a tre fermate invece del vecchio BASE mescolato al 50% con un viola spento
+        // (#4B3F8C), che lasciava metà schermo quasi nero: viola vivo -> blu elettrico -> base.
+        val vivid = if (dark != 0) mix(BASE, dark or 0xFF000000.toInt(), 0.85f) else 0xFF6B4BFF.toInt()
+        val blue = mix(vivid, 0xFF2F6BFF.toInt(), 0.55f)
         val bg = Paint()
-        bg.shader = LinearGradient(W * 0.1f, H * 0.7f, W.toFloat(), 0f, BASE, tint, Shader.TileMode.CLAMP)
+        bg.shader = LinearGradient(
+            W * 0.06f, H * 0.72f, W.toFloat(), 0f,
+            intArrayOf(BASE, vivid, blue, mix(BASE, blue, 0.35f)),
+            floatArrayOf(0f, 0.45f, 0.78f, 1f),
+            Shader.TileMode.CLAMP
+        )
         c.drawRect(0f, 0f, W.toFloat(), H * 0.7f, bg)
+
+        // Alone dietro l'arte: stacca logo e banner dal fondo senza schiarire il lato del testo
+        // (drawFades riporta comunque la sinistra verso la base).
+        val glow = Paint(Paint.ANTI_ALIAS_FLAG)
+        glow.shader = RadialGradient(
+            W * 0.72f, H * 0.22f, 820f,
+            intArrayOf(withAlpha(blue, 104), withAlpha(blue, 0)),
+            floatArrayOf(0f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        c.drawRect(0f, 0f, W.toFloat(), H * 0.7f, glow)
         drawFades(c, BASE)
 
         val pm = ctx.packageManager
@@ -252,12 +285,7 @@ object WallpaperRenderer {
             val bh = 428
             val img = drawableToBitmap(banner, bw, bh)
             val dst = RectF(cx - bw / 2f, cy - bh / 2f, cx + bw / 2f, cy + bh / 2f)
-            val clip = Path()
-            clip.addRoundRect(dst, 28f, 28f, Path.Direction.CW)
-            c.save()
-            c.clipPath(clip)
-            c.drawBitmap(img, null, dst, paint)
-            c.restore()
+            drawRounded(c, img, dst, 32f, paint)
             img.recycle()
         } else if (icon != null) {
             val s = 420
