@@ -92,9 +92,9 @@ object WallpaperEngine {
     const val AUTHORITY = "com.nuviorows.wallpapers"
     const val PROVIDER_UUID = "88a263c3-01fa-47bf-ab07-f4e3566d9157"
     private const val PROJECTIVY_PKG = "com.spocky.projengmenu"
-    // v5: angoli arrotondati antialiasati e gradient più vivo. Il numero fa parte della chiave,
-    // quindi senza il cambio in cache resterebbero i file vecchi con i bordi a scalini.
-    private const val RENDER_VERSION = "v5"
+    // v6: lo sfondo dei titoli senza backdrop usa quello ricavato da TMDB in fase di refresh.
+    // Il numero fa parte della chiave: senza il cambio resterebbero gli sfondi vecchi verticali.
+    private const val RENDER_VERSION = "v6"
     // ~1 MB a PNG e ~250 KB a JPEG: 60 file stanno sotto i 60 MB, su una TV con 800 MB liberi.
     private const val MAX_FILES = 60
 

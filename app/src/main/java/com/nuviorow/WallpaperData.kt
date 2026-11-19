@@ -216,6 +216,58 @@ object Tmdb {
         return info
     }
 
+    // Cache del solo backdrop: i titoli di righe che non ne hanno mai uno si ripetono a ogni
+    // refresh, quindi i "non trovati" restano segnati per qualche giorno invece di essere
+    // richiesti di nuovo ogni volta.
+    private const val ART_TTL_OK = 30L * 24 * 3600 * 1000
+    private const val ART_TTL_MISS = 3L * 24 * 3600 * 1000
+
+    /**
+     * Backdrop 16:9 di un titolo, ricavato dalla ricerca (una sola richiesta HTTP).
+     * Serve alle righe che pubblicano solo locandine verticali (CB01, StreamingCommunity): con
+     * lo stile orizzontale la loro card restava 2:3 e stonava accanto a quelle dei cataloghi TMDB.
+     */
+    fun art(ctx: Context, key: String, rawTitle: String, kindHint: String?): String {
+        val title = cleanTitle(rawTitle)
+        if (title.isEmpty() || key.isEmpty()) return ""
+        val year = yearOf(rawTitle)
+        val sp = ctx.getSharedPreferences("tmdbart", Context.MODE_PRIVATE)
+        val ck = "a:${kindHint ?: "any"}:${CardIndex.norm(title)}:$year"
+        val saved = sp.getString(ck, null)
+        if (saved != null) {
+            val ttl = if (saved.isEmpty()) ART_TTL_MISS else ART_TTL_OK
+            if (System.currentTimeMillis() - sp.getLong("$ck#t", 0L) < ttl) return saved
+        }
+        var path = ""
+        try {
+            val q = Uri.encode(title)
+            val kinds = when (kindHint) {
+                "movie" -> listOf("movie")
+                "series", "tv" -> listOf("tv")
+                else -> listOf("movie", "tv")
+            }
+            for (k in kinds) {
+                val yearParam = if (year.isNotEmpty()) {
+                    if (k == "movie") "&year=$year" else "&first_air_date_year=$year"
+                } else {
+                    ""
+                }
+                val arr = getJson("/search/$k", key, "query=$q&language=it-IT&include_adult=false$yearParam")
+                    .optJSONArray("results")
+                if (arr != null && arr.length() > 0) {
+                    path = str(arr.getJSONObject(0), "backdrop_path")
+                    if (path.isNotEmpty()) break
+                }
+            }
+        } catch (e: Exception) {
+            // rete o chiave non valida: la card resta sulla locandina
+            return ""
+        }
+        val out = if (path.isEmpty()) "" else "https://image.tmdb.org/t/p/w780$path"
+        sp.edit().putString(ck, out).putLong("$ck#t", System.currentTimeMillis()).apply()
+        return out
+    }
+
     private fun findImdb(key: String, imdb: String): Pair<String, Int>? {
         val j = getJson("/find/$imdb", key, "external_source=imdb_id&language=it-IT")
         val m = j.optJSONArray("movie_results")

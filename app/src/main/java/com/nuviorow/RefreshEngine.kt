@@ -282,19 +282,34 @@ object RefreshEngine {
         val batch = ArrayList<ContentProviderOperation>()
         val programsUri = TvContractCompat.PreviewPrograms.CONTENT_URI
 
+        // Con lo stile orizzontale alcune righe (CB01, StreamingCommunity) restano verticali perché
+        // l'addon pubblica solo la locandina e nessun background. Per queste chiedo a TMDB il solo
+        // backdrop: una richiesta per titolo nuovo, poi è in cache, e la card diventa 16:9 come le
+        // altre. Tetto per refresh, così una riga intera non si porta dietro decine di richieste.
+        var artLeft = 30
         for (m in metas) {
-            val type = when (m.type) {
+            var meta = m
+            if (landscape && artLeft > 0 && !m.background.startsWith("http") && store.tmdbKey.isNotEmpty()) {
+                artLeft--
+                val art = try {
+                    Tmdb.art(ctx, store.tmdbKey, m.name, m.type)
+                } catch (ex: Exception) {
+                    ""
+                }
+                if (art.isNotEmpty()) meta = m.copy(background = art)
+            }
+            val type = when (meta.type) {
                 "movie" -> TvContractCompat.PreviewPrograms.TYPE_MOVIE
                 "series" -> TvContractCompat.PreviewPrograms.TYPE_TV_SERIES
                 else -> TvContractCompat.PreviewPrograms.TYPE_CLIP
             }
             // Stile orizzontale: uso l'immagine "background" dell'addon; se manca, ripiego sulla locandina.
-            val useBackground = landscape && m.background.startsWith("http")
-            val image = if (useBackground) m.background else m.poster
+            val useBackground = landscape && meta.background.startsWith("http")
+            val image = if (useBackground) meta.background else meta.poster
             val ratio = if (useBackground) {
                 TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
             } else {
-                when (m.posterShape) {
+                when (meta.posterShape) {
                     "landscape" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
                     "square" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_1_1
                     else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
@@ -303,19 +318,23 @@ object RefreshEngine {
             val builder = PreviewProgram.Builder()
                 .setChannelId(channelId)
                 .setType(type)
-                .setTitle(m.name)
+                .setTitle(meta.name)
                 .setPosterArtUri(Uri.parse(image))
                 .setPosterArtAspectRatio(ratio)
-                .setIntent(programIntent(ctx, store, m))
-                .setInternalProviderId(m.id)
-            index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
-            if (m.description.isNotEmpty()) builder.setDescription(m.description.take(300))
+                .setIntent(programIntent(ctx, store, meta))
+                .setInternalProviderId(meta.id)
+            index.add(
+                CardIndex.Entry(
+                    meta.name, meta.id, meta.type, meta.poster, meta.background, meta.description, image
+                )
+            )
+            if (meta.description.isNotEmpty()) builder.setDescription(meta.description.take(300))
 
             val values = builder.build().toContentValues()
-            val old = published.remove(m.id)
+            val old = published.remove(meta.id)
             when {
                 old == null -> inserts.add(values)
-                old.title != m.name || old.image != image -> batch.add(
+                old.title != meta.name || old.image != image -> batch.add(
                     ContentProviderOperation.newUpdate(
                         ContentUris.withAppendedId(programsUri, old.rowId)
                     ).withValues(values).build()
