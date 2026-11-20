@@ -1,10 +1,14 @@
 package com.nuviorows
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.os.Process
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
@@ -37,15 +41,32 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
 }
 
 object Scheduler {
+
+    private fun constraints(): Constraints =
+        Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+    // Aggiornamento periodico ogni 2 ore (Android non permette meno di 15 minuti).
     fun schedule(context: Context) {
-        val req = PeriodicWorkRequestBuilder<RefreshWorker>(6, TimeUnit.HOURS)
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            )
+        val req = PeriodicWorkRequestBuilder<RefreshWorker>(2, TimeUnit.HOURS)
+            .setConstraints(constraints())
             .build()
         WorkManager.getInstance(context.applicationContext)
-            .enqueueUniquePeriodicWork("nuviorows-refresh", ExistingPeriodicWorkPolicy.KEEP, req)
+            .enqueueUniquePeriodicWork("nuviorows-refresh", ExistingPeriodicWorkPolicy.UPDATE, req)
+    }
+
+    // Un aggiornamento subito (all'accensione della TV o dopo un aggiornamento dell'app).
+    fun refreshSoon(context: Context) {
+        val req = OneTimeWorkRequestBuilder<RefreshWorker>()
+            .setConstraints(constraints())
+            .build()
+        WorkManager.getInstance(context.applicationContext)
+            .enqueueUniqueWork("nuviorows-now", ExistingWorkPolicy.REPLACE, req)
+    }
+}
+
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        Scheduler.schedule(context)
+        Scheduler.refreshSoon(context)
     }
 }
