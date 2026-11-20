@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.LruCache
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -13,21 +12,7 @@ import java.io.IOException
 
 /** Scarica e decodifica immagini (ridimensionate in lettura per non pesare sulla memoria). */
 object Imgs {
-
-    // cache in memoria: passando da una card all'altra le immagini sono già pronte
-    private val memory = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
-    }
-
     fun load(url: String, targetW: Int): Bitmap? {
-        val key = url + "@" + targetW
-        memory.get(key)?.let { return it }
-        val bmp = download(url, targetW) ?: return null
-        memory.put(key, bmp)
-        return bmp
-    }
-
-    private fun download(url: String, targetW: Int): Bitmap? {
         return try {
             val out = ByteArrayOutputStream()
             Net.stream(url).use { input ->
@@ -77,10 +62,6 @@ object CardIndex {
     @Volatile
     private var cacheStamp = -1L
 
-    // Indici pronti: cercare la card non deve scandire (e normalizzare) tutta la lista a ogni focus.
-    private var byIcon: Map<String, Entry> = emptyMap()
-    private var byName: Map<String, Entry> = emptyMap()
-
     fun norm(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
 
     fun save(ctx: Context, list: List<Entry>) {
@@ -126,39 +107,19 @@ object CardIndex {
         }
         cache = out
         cacheStamp = stamp
-        val icons = HashMap<String, Entry>(out.size * 2)
-        val names = HashMap<String, Entry>(out.size * 2)
-        for (e in out) {
-            if (e.icon.isNotEmpty()) icons.putIfAbsent(e.icon, e)
-            val n = norm(e.name)
-            if (n.isNotEmpty()) names.putIfAbsent(n, e)
-        }
-        byIcon = icons
-        byName = names
         return out
     }
 
     fun find(ctx: Context, icon: String?, title: String): Entry? {
-        if (entries(ctx).isEmpty()) return null
+        val list = entries(ctx)
+        if (list.isEmpty()) return null
         if (!icon.isNullOrEmpty()) {
-            byIcon[icon]?.let { return it }
+            val byIcon = list.firstOrNull { it.icon == icon }
+            if (byIcon != null) return byIcon
         }
         val n = norm(title)
         if (n.isEmpty()) return null
-        return byName[n]
-    }
-
-    // Voci vicine nella stessa riga: servono a scaldare le immagini della card successiva.
-    fun around(ctx: Context, entry: Entry, span: Int): List<Entry> {
-        val list = entries(ctx)
-        val i = list.indexOfFirst { it.id == entry.id && it.name == entry.name }
-        if (i < 0) return emptyList()
-        val out = ArrayList<Entry>(span * 2)
-        for (j in (i - span)..(i + span)) {
-            if (j == i || j < 0 || j >= list.size) continue
-            out.add(list[j])
-        }
-        return out
+        return list.firstOrNull { norm(it.name) == n }
     }
 }
 
@@ -216,56 +177,68 @@ object Tmdb {
         return info
     }
 
-    // Cache del solo backdrop: i titoli di righe che non ne hanno mai uno si ripetono a ogni
-    // refresh, quindi i "non trovati" restano segnati per qualche giorno invece di essere
-    // richiesti di nuovo ogni volta.
-    private const val ART_TTL_OK = 30L * 24 * 3600 * 1000
-    private const val ART_TTL_MISS = 3L * 24 * 3600 * 1000
+    private const val NEGATIVE_MS = 7L * 24 * 3600_000L
 
     /**
-     * Backdrop 16:9 di un titolo, ricavato dalla ricerca (una sola richiesta HTTP).
-     * Serve alle righe che pubblicano solo locandine verticali (CB01, StreamingCommunity): con
-     * lo stile orizzontale la loro card restava 2:3 e stonava accanto a quelle dei cataloghi TMDB.
+     * Solo lo sfondo orizzontale (percorso TMDB, es. "/abc.jpg") per un titolo: 1 richiesta, poi in cache.
+     * Se TMDB non ha lo sfondo, ricordo l'esito per 7 giorni per non richiederlo a ogni aggiornamento.
      */
-    fun art(ctx: Context, key: String, rawTitle: String, kindHint: String?): String {
+    fun backdropQuick(ctx: Context, key: String, imdbId: String?, rawTitle: String, kindHint: String?): String? {
+        val sp = ctx.getSharedPreferences("tmdbback", Context.MODE_PRIVATE)
         val title = cleanTitle(rawTitle)
-        if (title.isEmpty() || key.isEmpty()) return ""
         val year = yearOf(rawTitle)
-        val sp = ctx.getSharedPreferences("tmdbart", Context.MODE_PRIVATE)
-        val ck = "a:${kindHint ?: "any"}:${CardIndex.norm(title)}:$year"
-        val saved = sp.getString(ck, null)
-        if (saved != null) {
-            val ttl = if (saved.isEmpty()) ART_TTL_MISS else ART_TTL_OK
-            if (System.currentTimeMillis() - sp.getLong("$ck#t", 0L) < ttl) return saved
+        val useImdb = !imdbId.isNullOrEmpty() && imdbId.startsWith("tt")
+        val cacheKey = if (useImdb) "i:$imdbId" else "t:${kindHint ?: "any"}:${CardIndex.norm(title)}:$year"
+
+        val cached = sp.getString(cacheKey, null)
+        if (cached != null) {
+            if (cached.startsWith("!")) {
+                val at = cached.substring(1).toLongOrNull() ?: 0L
+                if (System.currentTimeMillis() - at < NEGATIVE_MS) return null
+            } else {
+                return cached
+            }
         }
+
         var path = ""
         try {
-            val q = Uri.encode(title)
-            val kinds = when (kindHint) {
-                "movie" -> listOf("movie")
-                "series", "tv" -> listOf("tv")
-                else -> listOf("movie", "tv")
+            if (useImdb && imdbId != null) {
+                val j = getJson("/find/$imdbId", key, "external_source=imdb_id&language=it-IT")
+                path = firstBackdrop(j.optJSONArray("movie_results"))
+                if (path.isEmpty()) path = firstBackdrop(j.optJSONArray("tv_results"))
             }
-            for (k in kinds) {
-                val yearParam = if (year.isNotEmpty()) {
-                    if (k == "movie") "&year=$year" else "&first_air_date_year=$year"
-                } else {
-                    ""
+            if (path.isEmpty() && title.isNotEmpty()) {
+                val q = Uri.encode(title)
+                val kinds = when (kindHint) {
+                    "movie" -> listOf("movie")
+                    "tv" -> listOf("tv")
+                    else -> listOf("movie", "tv")
                 }
-                val arr = getJson("/search/$k", key, "query=$q&language=it-IT&include_adult=false$yearParam")
-                    .optJSONArray("results")
-                if (arr != null && arr.length() > 0) {
-                    path = str(arr.getJSONObject(0), "backdrop_path")
+                for (k in kinds) {
+                    val yearParam = if (year.isNotEmpty()) {
+                        if (k == "movie") "&year=$year" else "&first_air_date_year=$year"
+                    } else {
+                        ""
+                    }
+                    val j = getJson("/search/$k", key, "query=$q&language=it-IT&include_adult=false$yearParam")
+                    path = firstBackdrop(j.optJSONArray("results"))
                     if (path.isNotEmpty()) break
                 }
             }
         } catch (e: Exception) {
-            // rete o chiave non valida: la card resta sulla locandina
-            return ""
+            return null // errore di rete o chiave: non memorizzo nulla, riprovo al prossimo giro
         }
-        val out = if (path.isEmpty()) "" else "https://image.tmdb.org/t/p/w780$path"
-        sp.edit().putString(ck, out).putLong("$ck#t", System.currentTimeMillis()).apply()
-        return out
+        sp.edit().putString(cacheKey, if (path.isEmpty()) "!" + System.currentTimeMillis() else path).apply()
+        return path.ifEmpty { null }
+    }
+
+    private fun firstBackdrop(arr: JSONArray?): String {
+        if (arr == null) return ""
+        for (i in 0 until Math.min(arr.length(), 5)) {
+            val p = str(arr.getJSONObject(i), "backdrop_path")
+            if (p.isNotEmpty()) return p
+        }
+        return ""
     }
 
     private fun findImdb(key: String, imdb: String): Pair<String, Int>? {
