@@ -10,24 +10,17 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
-import android.os.Process
 import android.provider.BaseColumns
 import androidx.tvprovider.media.tv.Channel
 import androidx.tvprovider.media.tv.ChannelLogoUtils
 import androidx.tvprovider.media.tv.PreviewProgram
 import androidx.tvprovider.media.tv.TvContractCompat
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
 
 data class RefreshResult(val newChannelIds: List<Long>, val message: String)
 
 object RefreshEngine {
 
     private const val GUIDE_KEY = "__guide__"
-
-    private class CatalogJob(val addon: AddonCfg, val catalog: CatalogCfg, val channelId: Long)
-
-    private class OldProgram(val rowId: Long, val title: String?, val image: String?)
 
     @Synchronized
     fun refresh(context: Context): RefreshResult {
@@ -36,6 +29,25 @@ object RefreshEngine {
         val resolver = ctx.contentResolver
         val addons = store.loadAddons()
         val channelIds = store.loadChannelIds()
+
+        // Rileggo i manifest: se lo scraper aggiunge o toglie cataloghi, la lista si aggiorna da sola.
+        var addonsChanged = false
+        for (i in addons.indices) {
+            val old = addons[i]
+            try {
+                val fresh = Stremio.loadAddon(old.baseUrl)
+                for (c in fresh.catalogs) {
+                    c.enabled = old.catalogs.firstOrNull { it.key == c.key }?.enabled ?: false
+                }
+                if (fresh != old) {
+                    addons[i] = fresh
+                    addonsChanged = true
+                }
+            } catch (ex: Exception) {
+                // offline o addon non raggiungibile: tengo la lista salvata
+            }
+        }
+        if (addonsChanged) store.saveAddons(addons)
 
         val wanted = LinkedHashMap<String, Pair<AddonCfg, CatalogCfg>>()
         for (a in addons) {
@@ -63,10 +75,8 @@ object RefreshEngine {
         val newIds = mutableListOf<Long>()
         val index = ArrayList<CardIndex.Entry>()
         var ok = 0
-        val errors = java.util.Collections.synchronizedList(ArrayList<String>())
+        val errors = mutableListOf<String>()
 
-        // 1) canali: poche query locali, meglio farle prima e in sequenza
-        val jobs = ArrayList<CatalogJob>()
         for ((key, pair) in wanted) {
             val addon = pair.first
             val cat = pair.second
@@ -78,43 +88,12 @@ object RefreshEngine {
                     channelIds[key] = channelId
                     newIds.add(channelId)
                 }
-                jobs.add(CatalogJob(addon, cat, channelId))
+                val metas = Stremio.fetchCatalog(addon.baseUrl, cat.type, cat.id, store.maxItems)
+                replacePrograms(ctx, store, channelId, metas, index)
+                ok++
             } catch (ex: Exception) {
                 errors.add("${cat.name}: ${ex.message}")
             }
-        }
-
-        // 2) cataloghi in parallelo: la rete è il collo di bottiglia
-        val perCatalog = arrayOfNulls<List<CardIndex.Entry>>(jobs.size)
-        if (jobs.isNotEmpty()) {
-            val pool = Executors.newFixedThreadPool(minOf(4, jobs.size))
-            try {
-                val tasks = jobs.mapIndexed { i, job ->
-                    Callable<String?> {
-                        try {
-                            // a priorità bassa: il refresh non deve rubare CPU alla home
-                            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-                            val metas = Stremio.fetchCatalog(
-                                job.addon.baseUrl, job.catalog.type, job.catalog.id, store.maxItems
-                            )
-                            val local = ArrayList<CardIndex.Entry>(metas.size)
-                            replacePrograms(ctx, store, job.channelId, metas, local)
-                            perCatalog[i] = local
-                            null
-                        } catch (ex: Exception) {
-                            "${job.catalog.name}: ${ex.message}"
-                        }
-                    }
-                }
-                for (f in pool.invokeAll(tasks)) {
-                    val error = f.get()
-                    if (error == null) ok++ else errors.add(error)
-                }
-            } finally {
-                pool.shutdown()
-            }
-            // riordino come i cataloghi, così cards.json resta stabile tra un refresh e l'altro
-            for (l in perCatalog) if (l != null) index.addAll(l)
         }
 
         if (guideWanted) {
@@ -139,6 +118,8 @@ object RefreshEngine {
             errors.isEmpty() -> "Aggiornate $ok righe."
             else -> "Aggiornate $ok righe, errori: " + errors.joinToString("; ")
         }
+        store.lastRefreshAt = System.currentTimeMillis()
+        store.lastRefreshMsg = msg
         return RefreshResult(newIds, msg)
     }
 
@@ -152,34 +133,15 @@ object RefreshEngine {
             channelIds[GUIDE_KEY] = channelId
             newIds.add(channelId)
         }
+        if (channelHasPrograms(ctx, channelId)) return
         val resolver = ctx.contentResolver
-        val poster = "android.resource://" + ctx.packageName + "/drawable/guide_card_v2"
-        // se l'immagine pubblicata è già quella giusta non tocco la home;
-        // se è cambiata la rimpiazzo, altrimenti il launcher continua a mostrare quella vecchia in cache
-        val current = try {
-            resolver.query(
-                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
-                arrayOf(BaseColumns._ID, "poster_art_uri"),
-                null, null, null
-            )?.use { c -> if (c.moveToFirst()) c.getString(1) else null }
-        } catch (e: Exception) {
-            null
-        }
-        if (current == poster) return
-        if (current != null) {
-            try {
-                resolver.delete(TvContractCompat.buildPreviewProgramsUriForChannel(channelId), null, null)
-            } catch (e: Exception) {
-                // se non riesco a cancellare, l'insert qui sotto rimedia al prossimo giro
-            }
-        }
         val intent = Intent(ctx, GuideActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val program = PreviewProgram.Builder()
             .setChannelId(channelId)
             .setType(TvContractCompat.PreviewPrograms.TYPE_CLIP)
             .setTitle("Guida TV")
             .setDescription("Apri la guida dei canali")
-            .setPosterArtUri(Uri.parse(poster))
+            .setPosterArtUri(Uri.parse("android.resource://" + ctx.packageName + "/drawable/guide_card"))
             .setPosterArtAspectRatio(TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9)
             .setIntent(intent)
             .setInternalProviderId("guide")
@@ -227,6 +189,18 @@ object RefreshEngine {
         return id
     }
 
+    private fun channelHasPrograms(ctx: Context, channelId: Long): Boolean {
+        return try {
+            ctx.contentResolver.query(
+                TvContractCompat.buildPreviewProgramsUriForChannel(channelId),
+                arrayOf(BaseColumns._ID),
+                null, null, null
+            )?.use { it.count > 0 } ?: false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun replacePrograms(
         ctx: Context,
         store: Store,
@@ -235,142 +209,65 @@ object RefreshEngine {
         index: MutableList<CardIndex.Entry>
     ) {
         val resolver = ctx.contentResolver
-        val channelUri = TvContractCompat.buildPreviewProgramsUriForChannel(channelId)
         val landscape = store.cardStyle == "landscape"
+        val values = ArrayList<ContentValues>()
+        val sig = StringBuilder()
 
-        // Righe già pubblicate per questo canale: servono ad aggiornare solo ciò che cambia,
-        // così gli ID restano stabili e il launcher non ricarica tutte le copertine.
-        // Se il TvProvider non supporta la query, ricado su delete + insert.
-        var canDiff = false
-        val published = HashMap<String, OldProgram>()
-        try {
-            resolver.query(
-                channelUri,
-                arrayOf(BaseColumns._ID, "internal_provider_id", "title", "poster_art_uri"),
-                null, null, null
-            )?.use { c ->
-                val iId = c.getColumnIndex(BaseColumns._ID)
-                val iPid = c.getColumnIndex("internal_provider_id")
-                val iTitle = c.getColumnIndex("title")
-                val iImage = c.getColumnIndex("poster_art_uri")
-                // senza la colonna dell'id interno non posso riconoscere le card: delete + insert
-                if (iPid >= 0) {
-                    canDiff = true
-                    while (c.moveToNext()) {
-                        val pid = c.getString(iPid)
-                        if (pid.isNullOrEmpty()) continue
-                        published[pid] = OldProgram(
-                            c.getLong(iId),
-                            if (iTitle >= 0) c.getString(iTitle) else null,
-                            if (iImage >= 0) c.getString(iImage) else null
-                        )
-                    }
-                }
-            }
-        } catch (ex: Exception) {
-            canDiff = false
-        }
-        if (!canDiff) {
-            try {
-                resolver.delete(channelUri, null, null)
-            } catch (ex: Exception) {
-                // ignora
-            }
-        }
-
-        val inserts = ArrayList<ContentValues>()
-        val batch = ArrayList<ContentProviderOperation>()
-        val programsUri = TvContractCompat.PreviewPrograms.CONTENT_URI
-
-        // Con lo stile orizzontale alcune righe (CB01, StreamingCommunity) restano verticali perché
-        // l'addon pubblica solo la locandina e nessun background. Per queste chiedo a TMDB il solo
-        // backdrop: una richiesta per titolo nuovo, poi è in cache, e la card diventa 16:9 come le
-        // altre. Tetto per refresh, così una riga intera non si porta dietro decine di richieste.
-        var artLeft = 30
         for (m in metas) {
-            var meta = m
-            if (landscape && artLeft > 0 && !m.background.startsWith("http") && store.tmdbKey.isNotEmpty()) {
-                artLeft--
-                val art = try {
-                    Tmdb.art(ctx, store.tmdbKey, m.name, m.type)
-                } catch (ex: Exception) {
-                    ""
-                }
-                if (art.isNotEmpty()) meta = m.copy(background = art)
-            }
-            val type = when (meta.type) {
+            val type = when (m.type) {
                 "movie" -> TvContractCompat.PreviewPrograms.TYPE_MOVIE
                 "series" -> TvContractCompat.PreviewPrograms.TYPE_TV_SERIES
                 else -> TvContractCompat.PreviewPrograms.TYPE_CLIP
             }
             // Stile orizzontale: uso l'immagine "background" dell'addon; se manca, ripiego sulla locandina.
-            val useBackground = landscape && meta.background.startsWith("http")
-            val image = if (useBackground) meta.background else meta.poster
+            val useBackground = landscape && m.background.startsWith("http")
+            val image = if (useBackground) m.background else m.poster
             val ratio = if (useBackground) {
                 TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
             } else {
-                when (meta.posterShape) {
+                when (m.posterShape) {
                     "landscape" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_16_9
                     "square" -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_1_1
                     else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
                 }
             }
-            val builder = PreviewProgram.Builder()
+            val program = PreviewProgram.Builder()
                 .setChannelId(channelId)
                 .setType(type)
-                .setTitle(meta.name)
+                .setTitle(m.name)
                 .setPosterArtUri(Uri.parse(image))
                 .setPosterArtAspectRatio(ratio)
-                .setIntent(programIntent(ctx, store, meta))
-                .setInternalProviderId(meta.id)
-            index.add(
-                CardIndex.Entry(
-                    meta.name, meta.id, meta.type, meta.poster, meta.background, meta.description, image
+                .setIntent(programIntent(ctx, store, m))
+                .setInternalProviderId(m.id)
+                .build()
+            index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
+            values.add(program.toContentValues())
+            sig.append(m.id).append('|').append(m.name).append('|').append(image).append('|').append(ratio).append(';')
+        }
+
+        // Se i titoli sono gli stessi dell'ultima volta non tocco la home: evita che il launcher la ricarichi ogni volta.
+        val sigStr = sig.toString().hashCode().toString() + ":" + sig.length
+        val sp = ctx.getSharedPreferences("sigs", Context.MODE_PRIVATE)
+        val sigKey = "ch$channelId"
+        if (sp.getString(sigKey, null) == sigStr && channelHasPrograms(ctx, channelId)) return
+
+        val programsUri = TvContractCompat.buildPreviewProgramsUriForChannel(channelId)
+        try {
+            val ops = ArrayList<ContentProviderOperation>()
+            ops.add(ContentProviderOperation.newDelete(programsUri).build())
+            for (cv in values) {
+                ops.add(
+                    ContentProviderOperation.newInsert(TvContractCompat.PreviewPrograms.CONTENT_URI)
+                        .withValues(cv)
+                        .build()
                 )
-            )
-            if (meta.description.isNotEmpty()) builder.setDescription(meta.description.take(300))
-
-            val values = builder.build().toContentValues()
-            val old = published.remove(meta.id)
-            when {
-                old == null -> inserts.add(values)
-                old.title != meta.name || old.image != image -> batch.add(
-                    ContentProviderOperation.newUpdate(
-                        ContentUris.withAppendedId(programsUri, old.rowId)
-                    ).withValues(values).build()
-                )
             }
+            resolver.applyBatch(TvContractCompat.AUTHORITY, ops)
+        } catch (e: Exception) {
+            resolver.delete(programsUri, null, null)
+            for (cv in values) resolver.insert(TvContractCompat.PreviewPrograms.CONTENT_URI, cv)
         }
-
-        // Titoli spariti dal catalogo
-        for (o in published.values) {
-            batch.add(
-                ContentProviderOperation.newDelete(
-                    ContentUris.withAppendedId(programsUri, o.rowId)
-                ).build()
-            )
-        }
-
-        if (inserts.isNotEmpty()) {
-            try {
-                resolver.bulkInsert(channelUri, inserts.toTypedArray())
-            } catch (ex: Exception) {
-                for (v in inserts) {
-                    try {
-                        resolver.insert(channelUri, v)
-                    } catch (e: Exception) {
-                        // ignora la singola card
-                    }
-                }
-            }
-        }
-        if (batch.isNotEmpty()) {
-            try {
-                resolver.applyBatch(programsUri.authority ?: "android.media.tv", batch)
-            } catch (ex: Exception) {
-                // best effort: le card restano come prima
-            }
-        }
+        sp.edit().putString(sigKey, sigStr).apply()
     }
 
     private fun launchIntent(ctx: Context, store: Store): Intent {
