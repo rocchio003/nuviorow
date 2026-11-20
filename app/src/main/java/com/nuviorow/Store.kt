@@ -54,6 +54,15 @@ class Store(context: Context) {
         get() = sp.getString("sparkleLink", "") ?: ""
         set(v) = sp.edit().putString("sparkleLink", v.trim()).apply()
 
+    // Ultimo aggiornamento delle righe (per vedere se l'aggiornamento automatico gira davvero)
+    var lastRefreshAt: Long
+        get() = sp.getLong("lastRefreshAt", 0L)
+        set(v) = sp.edit().putLong("lastRefreshAt", v).apply()
+
+    var lastRefreshMsg: String
+        get() = sp.getString("lastRefreshMsg", "") ?: ""
+        set(v) = sp.edit().putString("lastRefreshMsg", v).apply()
+
     // Chiave API TMDB v3 (titolo e trama in italiano per lo sfondo dinamico)
     var tmdbKey: String
         get() = sp.getString("tmdbKey", "") ?: ""
