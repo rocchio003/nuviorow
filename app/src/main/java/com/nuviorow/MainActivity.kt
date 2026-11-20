@@ -21,6 +21,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.tvprovider.media.tv.TvContractCompat
 import java.net.Inet4Address
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.net.NetworkInterface
 import java.util.concurrent.Executors
 
@@ -34,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var listBox: LinearLayout
     private lateinit var status: TextView
     private lateinit var webInfo: TextView
+    private lateinit var lastInfo: TextView
     private val fieldRefreshers = mutableListOf<() -> Unit>()
 
     private val gray = 0xFFAAAAAA.toInt()
@@ -74,6 +78,8 @@ class MainActivity : Activity() {
         )
         webInfo = tv("", 14f, 0xFFFFD54F.toInt(), false)
         root.addView(webInfo)
+        lastInfo = tv("", 13f, 0xFF80CBC4.toInt(), false)
+        root.addView(lastInfo)
 
         // ---- Impostazioni ----
         root.addView(tv("1. Impostazioni apertura card", 20f, Color.WHITE, true))
@@ -168,6 +174,9 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         web.start()
+        addons = store.loadAddons()
+        renderAddons()
+        showLastRefresh()
         val ips = localIps()
         webInfo.text = if (ips.isEmpty()) {
             "Rete non trovata: collega la TV al Wi-Fi per usare l'inserimento dal telefono."
@@ -243,6 +252,9 @@ class MainActivity : Activity() {
             val r = RefreshEngine.refresh(this@MainActivity)
             runOnUiThread {
                 setStatus(r.message)
+                addons = store.loadAddons()
+                renderAddons()
+                showLastRefresh()
                 for (id in r.newChannelIds) {
                     try {
                         TvContractCompat.requestChannelBrowsable(this@MainActivity, id)
@@ -298,6 +310,17 @@ class MainActivity : Activity() {
                 renderAddons()
                 setStatus("Rimosso. Premi \"Aggiorna le righe adesso\" per toglierlo dalla home.")
             })
+        }
+    }
+
+    private fun showLastRefresh() {
+        val at = store.lastRefreshAt
+        lastInfo.text = if (at == 0L) {
+            "Righe mai aggiornate: premi \"Aggiorna le righe adesso\"."
+        } else {
+            "Ultimo aggiornamento righe: " +
+                SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date(at)) +
+                " - " + store.lastRefreshMsg
         }
     }
 
