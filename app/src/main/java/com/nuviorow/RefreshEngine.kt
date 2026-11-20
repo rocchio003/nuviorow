@@ -88,7 +88,7 @@ object RefreshEngine {
                     channelIds[key] = channelId
                     newIds.add(channelId)
                 }
-                val metas = Stremio.fetchCatalog(addon.baseUrl, cat.type, cat.id, store.maxItems)
+                val metas = withBackdrops(ctx, store, Stremio.fetchCatalog(addon.baseUrl, cat.type, cat.id, store.maxItems))
                 replacePrograms(ctx, store, channelId, metas, index)
                 ok++
             } catch (ex: Exception) {
@@ -189,6 +189,31 @@ object RefreshEngine {
         return id
     }
 
+    // Per le card senza sfondo orizzontale (es. CB01, StreamingCommunity) lo cerco su TMDB.
+    private fun withBackdrops(ctx: Context, store: Store, metas: List<Meta>): List<Meta> {
+        if (store.cardStyle != "landscape" || store.tmdbKey.isEmpty()) return metas
+        val out = ArrayList<Meta>(metas.size)
+        for (m in metas) {
+            if (m.background.startsWith("http")) {
+                out.add(m)
+                continue
+            }
+            val imdb = if (m.id.startsWith("tt")) m.id else null
+            val kind = when (m.type) {
+                "series" -> "tv"
+                "movie" -> "movie"
+                else -> null
+            }
+            val path = try {
+                Tmdb.backdropQuick(ctx, store.tmdbKey, imdb, m.name, kind)
+            } catch (e: Exception) {
+                null
+            }
+            out.add(if (path != null) m.copy(background = "https://image.tmdb.org/t/p/w780$path") else m)
+        }
+        return out
+    }
+
     private fun channelHasPrograms(ctx: Context, channelId: Long): Boolean {
         return try {
             ctx.contentResolver.query(
@@ -231,7 +256,7 @@ object RefreshEngine {
                     else -> TvContractCompat.PreviewPrograms.ASPECT_RATIO_2_3
                 }
             }
-            val program = PreviewProgram.Builder()
+            val builder = PreviewProgram.Builder()
                 .setChannelId(channelId)
                 .setType(type)
                 .setTitle(m.name)
@@ -239,10 +264,15 @@ object RefreshEngine {
                 .setPosterArtAspectRatio(ratio)
                 .setIntent(programIntent(ctx, store, m))
                 .setInternalProviderId(m.id)
-                .build()
+            // Sotto la card tengo solo le diciture brevi (es. "Da CB01", "Da StreamingCommunity"):
+            // le trame lunghe le mostra già lo sfondo.
+            val shownDesc = if (m.description.length in 1..60) m.description else ""
+            if (shownDesc.isNotEmpty()) builder.setDescription(shownDesc)
+            val program = builder.build()
             index.add(CardIndex.Entry(m.name, m.id, m.type, m.poster, m.background, m.description, image))
             values.add(program.toContentValues())
-            sig.append(m.id).append('|').append(m.name).append('|').append(image).append('|').append(ratio).append(';')
+            sig.append(m.id).append('|').append(m.name).append('|').append(image).append('|')
+                .append(ratio).append('|').append(shownDesc).append(';')
         }
 
         // Se i titoli sono gli stessi dell'ultima volta non tocco la home: evita che il launcher la ricarichi ogni volta.
