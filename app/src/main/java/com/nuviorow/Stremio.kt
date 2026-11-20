@@ -32,8 +32,7 @@ object Net {
             conn.connectTimeout = 20000
             conn.readTimeout = 60000
             conn.setRequestProperty("User-Agent", "NuvioRows/1.0")
-            // gzip: M3U ed EPG calano di 5-10 volte come byte trasferiti
-            conn.setRequestProperty("Accept-Encoding", "gzip")
+            conn.setRequestProperty("Accept-Encoding", "identity")
             val code = conn.responseCode
             if (code in 300..399) {
                 val loc = conn.getHeaderField("Location")
@@ -65,7 +64,7 @@ object Net {
             conn.readTimeout = 25000
             conn.setRequestProperty("User-Agent", "NuvioRows/1.0")
             conn.setRequestProperty("Accept", "application/json,text/plain,*/*")
-            conn.setRequestProperty("Accept-Encoding", "gzip")
+            conn.setRequestProperty("Cache-Control", "no-cache")
             try {
                 val code = conn.responseCode
                 if (code in 300..399) {
@@ -75,13 +74,7 @@ object Net {
                     continue
                 }
                 if (code !in 200..299) throw IOException("HTTP $code")
-                // gzip riconosciuto dai primi due byte, senza fidarsi degli header
-                val raw = BufferedInputStream(conn.inputStream, 65536)
-                raw.mark(2)
-                val gzipped = raw.read() == 0x1f && raw.read() == 0x8b
-                raw.reset()
-                val body: InputStream = if (gzipped) GZIPInputStream(raw) else raw
-                return body.bufferedReader().use { it.readText() }
+                return conn.inputStream.bufferedReader().use { it.readText() }
             } finally {
                 conn.disconnect()
             }
